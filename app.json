@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Sholdi",
+    "slug": "sholdi",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "sholdi",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#131114",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.sholdi.app"
+    },
+    "android": {
+      "package": "com.sholdi.app",
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {
+        "backgroundColor": "#131114"
+      }
+    },
+    "web": {
+      "output": "static",
+      "bundler": "metro"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-secure-store"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d291b4a3-9901-4a66-ad6b-68b533dc49c0"
+      }
+    }
+  }
+}
