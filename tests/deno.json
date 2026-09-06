@@ -1,6 +1,16 @@
 {
   "compilerOptions": {
     "strict": true,
-    "lib": ["deno.window", "esnext"]
+    "lib": [
+      "deno.window",
+      "esnext"
+    ]
+  },
+  "unstable": [
+    "sloppy-imports"
+  ],
+  "imports": {
+    "@noble/ciphers/": "npm:/@noble/ciphers@^2.4.0/",
+    "@noble/hashes/": "npm:/@noble/hashes@^2.4.0/"
   }
 }
