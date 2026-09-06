@@ -8,5 +8,5 @@
   },
   "include": ["**/*.ts", "**/*.tsx", ".expo/types/**/*.ts", "expo-env.d.ts"],
   "//": "supabase/ is Deno, not React Native. It is type-checked by the Supabase CLI (see supabase/functions/deno.json), and its npm: specifiers and Deno globals are meaningless to this compiler.",
-  "exclude": ["node_modules", "dist", "supabase"]
+  "exclude": ["node_modules", "dist", "supabase", "tests", "android", "ios"]
 }

@@ -16,10 +16,9 @@ import { StatusBar } from 'expo-status-bar';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 
 import { Splash } from '@/components/Splash';
-import { CACHE_BUSTER, createCachePersister, queryClient } from '@/lib/queryClient';
+import { queryClient } from '@/lib/queryClient';
 import { colors } from '@/theme/tokens';
 
 SplashScreen.preventAutoHideAsync();
@@ -55,9 +54,6 @@ export default function RootLayout() {
     if (loaded || error) SplashScreen.hideAsync();
   }, [loaded, error]);
 
-  // Null where MMKV is unavailable (the static render pass); the app then runs
-  // with an in-memory cache instead of failing to boot.
-  const persister = useMemo(() => createCachePersister(), []);
 
   // The in-app splash (§6.1) runs after the fonts land, because the wordmark is
   // Space Grotesk. The native splash covers everything before that.
@@ -98,13 +94,5 @@ export default function RootLayout() {
     </GestureHandlerRootView>
   );
 
-  return persister ? (
-    <PersistQueryClientProvider
-      client={queryClient}
-      persistOptions={{ persister, buster: CACHE_BUSTER }}>
-      {tree}
-    </PersistQueryClientProvider>
-  ) : (
-    <QueryClientProvider client={queryClient}>{tree}</QueryClientProvider>
-  );
+  return <QueryClientProvider client={queryClient}>{tree}</QueryClientProvider>;
 }

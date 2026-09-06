@@ -61,75 +61,79 @@ those is somewhere web looks right and the phone may not.
 
 ---
 
-## Backend
+## Backend — local-first
 
-Nothing is wired to a project yet. To connect one:
+**Your spending never leaves the phone.** Every expense lives in SQLite on the device
+(`src/lib/db.ts`). There is no cloud database, no account, and no sync.
+
+This departs from ARCHITECTURE.md §3, which put expenses in Supabase Postgres behind
+RLS. It was a considered change, not drift: the privacy story is the product.
+
+What still leaves the device, and only for the duration of one request:
+
+| What | When | Stored afterwards |
+|---|---|---|
+| A statement PDF | You import one | No |
+| A receipt photo | You scan one | No |
+| A typed note | You type one | No |
+| Aggregated monthly totals | You ask a question, or an insight gets written | No |
+
+Individual transactions are **never** sent for questions or insights — only totals per
+category per month, which is what §4.5 asked for and is now enforced by what the app
+sends rather than by what a server-side query chooses to select.
+
+The one thing that cannot be local is the Anthropic API key. §4.1 is right that an
+`EXPO_PUBLIC_*` var is readable by anyone with the APK, so a thin server holds the
+key. It holds nothing else — the functions are stateless.
+
+### Deploying the functions
 
 ```bash
-cp .env.example .env      # fill in the URL and anon key
+cp .env.example .env      # functions URL and anon key
 supabase link --project-ref <ref>
-supabase db push          # applies supabase/migrations in order
 supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
-supabase secrets set CRON_SECRET="$(openssl rand -hex 32)"   # generate-insights only
 
 supabase functions deploy extract-text
 supabase functions deploy extract-statement
 supabase functions deploy extract-receipt
 supabase functions deploy ask-sholdi
-supabase functions deploy generate-insights
+supabase functions deploy write-insight
 ```
 
-`generate-insights` is called by `pg_cron`, not by the app, so it authenticates with
-`CRON_SECRET` rather than a user JWT. The schedule reads the function URL and that
-same secret from Vault — set both once, after deploying:
+No `supabase db push` — there is no schema to push.
 
-```sql
-select vault.create_secret('https://<ref>.supabase.co/functions/v1/generate-insights',
-                           'generate_insights_url');
-select vault.create_secret('<the CRON_SECRET value>', 'generate_insights_cron_secret');
-```
-
-**The anon key belongs in `.env`; the Anthropic key never does.** An `EXPO_PUBLIC_*`
-var is readable by anyone with the APK (ARCHITECTURE.md §4.1), so every AI call goes
-through an Edge Function that holds the key as a server-side secret. The anon key is
-public by design and is protected by the RLS policies in the first migration.
-
-### Migrations
-
-| File | What it establishes |
+| Function | Does |
 |---|---|
-| `..._init.sql` | Tables, indexes, RLS on every table, `monthly_category_totals` |
-| `..._seed_system_categories.sql` | The five categories from DESIGN.md §4.3, on signup |
-| `..._insight_cap.sql` | Hard cap of 3 insights per calendar month, in SQL |
-| `..._storage.sql` | Private `statements` and `receipts` buckets, per-user folders |
-| `..._schedule_insights.sql` | `pg_cron` weekly trigger for `generate-insights` |
+| `extract-text` | free text → one expense |
+| `extract-statement` | bank PDF → many |
+| `extract-receipt` | photo → one (backs Scan and "drop any photo") |
+| `ask-sholdi` | question + totals the device computed → answer |
+| `write-insight` | a pattern the device detected → Sholdi's words for it |
+| `transcribe-voice` | **not built** — see Open questions |
 
-RLS is on from the first migration and there is no path that adds it later —
-retrofitting it is miserable (§7).
+Insight *detection* runs on the device (`src/features/insights/patterns.ts`), so §4.6's
+weekly `pg_cron` job is gone. What survives is what made it calm: detection is
+threshold-first, so the model is never asked "is there anything here?", and the
+3-per-month cap moved from a database trigger into device code.
 
-### Edge Functions
+**On protecting the endpoint:** with no accounts there is no per-user auth left. What
+remains is Supabase's default JWT gate, satisfied by the anon key. That key ships
+inside the APK and can be extracted, so it stops a passer-by, not a determined one.
+Put a spend cap on the Anthropic key before launch.
 
-| Function | Trigger | Does |
-|---|---|---|
-| `extract-text` | client | free text → one `ExtractedExpense` |
-| `extract-statement` | client, after upload | bank PDF → many |
-| `extract-receipt` | client, after upload | photo → one (backs both Scan and "drop any photo") |
-| `ask-sholdi` | client | question + **aggregated summary** → answer |
-| `generate-insights` | `pg_cron`, weekly | pattern detection → `insights` rows |
-| `transcribe-voice` | — | **not built** — see Open questions |
-
-Type-check and test them with Deno (they are excluded from the app's `tsconfig.json`,
-which is React Native and knows nothing about `npm:` specifiers or `Deno`):
+### Tests
 
 ```bash
+deno test --config tests/deno.json tests/      # 33 — app logic
 cd supabase/functions
 deno check --config deno.json */index.ts
-deno test --config deno.json _shared/
+deno test --config deno.json _shared/          # 14 — function logic
 ```
 
-The pieces worth trusting are the pure ones, and they are tested: semantic validation
-(`_shared/validate.ts`), pattern detection (`_shared/patterns.ts`), and the byte and
-PDF helpers. 28 tests.
+47 tests over the pure logic: money (integer cents, rounding, sign handling), dates,
+insight pattern detection, semantic validation, and the byte/PDF helpers. The Deno
+files are excluded from the app's `tsconfig.json`, which is React Native and knows
+nothing about `npm:` specifiers or `Deno`.
 
 ---
 
@@ -138,10 +142,11 @@ PDF helpers. 28 tests.
 Following ARCHITECTURE.md §6:
 
 - **1. Theme, primitives, static Home** — done.
-- **2. Supabase schema, RLS, client, session persistence** — schema and client written;
-  needs a real project to finish. No auth gate yet.
+- **2. Storage** — done, and rescoped. SQLite schema, seeded categories, and the
+  repository that replaces the `monthly_category_totals` view. No auth needed.
 - **3. Manual entry + categories CRUD** — not started. This is the next thing worth
-  doing: it is what makes the app usable without any AI at all.
+  doing: it is what makes the app usable without any AI at all, and nothing can be
+  seen on real data until there is a way to put data in.
 - **4. `extract-text`** — written, unverified against the live API.
 - **5. PDF upload → `extract-statement` → review → import** — function and review
   screen written; the upload step and bulk import are not wired.

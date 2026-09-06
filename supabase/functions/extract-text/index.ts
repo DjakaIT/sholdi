@@ -1,17 +1,23 @@
 /**
  * extract-text — free text to one ExtractedExpense. ARCHITECTURE.md §4.5.
  *
- * Build-order step 4: the smallest possible AI loop, end to end. It backs the
- * "Type it" tile, and `transcribe-voice` will call it too — voice is just text with
- * a transcription step in front (§4.2).
+ * Stateless: text in, one expense out, nothing stored. The app writes the result to
+ * its own SQLite database.
  *
- * Input:  { "text": "38 euro konzum yesterday" }
+ * It backs the "Type it" tile, and voice will reuse it — voice is text with a
+ * transcription step in front (§4.2).
+ *
+ * Input:  { "text": "38 euro konzum yesterday",
+ *           "categories": ["Groceries", ...],   // the device's own category names
+ *           "today": "2026-09-05" }             // the device's date
  * Output: { "expense": ExtractedExpense }
  */
 import { extractStructured } from '../_shared/anthropic.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
-import { HttpError, categoryNames, json, requireCaller, serveJson } from '../_shared/auth.ts';
+import { HttpError, categoryNamesFrom, json, serveJson, todayFrom } from '../_shared/http.ts';
 import { validateExtracted } from '../_shared/validate.ts';
+
+const MAX_TEXT_LENGTH = 500;
 
 const SYSTEM = `You turn a short note about a purchase into one structured expense.
 
@@ -29,19 +35,16 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const caller = await requireCaller(req);
-
     const body = await req.json().catch(() => ({}));
+
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) throw new HttpError(400, 'Provide some text describing the expense');
+    if (text.length > MAX_TEXT_LENGTH) {
+      throw new HttpError(400, 'That is a bit long for one expense.');
+    }
 
-    const categories = await categoryNames(caller);
-    // The device's own date: "yesterday" must resolve in the user's timezone, not
-    // the edge region's (§7).
-    const today =
-      typeof body.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.today)
-        ? body.today
-        : new Date().toISOString().slice(0, 10);
+    const categories = categoryNamesFrom(body);
+    const today = todayFrom(body);
 
     const extracted = await extractStructured<Record<string, unknown>>({
       system: SYSTEM,

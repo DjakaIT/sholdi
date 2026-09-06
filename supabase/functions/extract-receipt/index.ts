@@ -1,22 +1,20 @@
 /**
  * extract-receipt — a photo to one ExtractedExpense. ARCHITECTURE.md §4.5.
  *
- * This backs both the "Scan" tile and the "or drop any photo" catch-all: §4.2 is
- * explicit that "photos are just receipts", so there is one path, not two.
+ * Backs both the "Scan" tile and the "or drop any photo" catch-all: §4.2 is explicit
+ * that "photos are just receipts", so there is one path, not two.
  *
- * Like extract-statement, the client uploads to Storage first and sends a path —
- * the image crosses the phone once (§4.4).
+ * Stateless. The photo is posted, read, and discarded — never stored.
  *
- * Input:  { "storagePath": "<user-id>/receipt.jpg", "source": "receipt" | "photo" }
+ * Input:  multipart/form-data with `file` (the image), optional `categories`
+ *         (JSON array) and `today` fields
  * Output: { "expense": ExtractedExpense }
  */
 import { extractStructured } from '../_shared/anthropic.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
-import { HttpError, categoryNames, json, requireCaller, serveJson } from '../_shared/auth.ts';
+import { HttpError, json, serveJson } from '../_shared/http.ts';
 import { normaliseImageMedia, toBase64 } from '../_shared/encoding.ts';
 import { validateExtracted } from '../_shared/validate.ts';
-
-const RECEIPT_BUCKET = 'receipts';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -37,17 +35,11 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const caller = await requireCaller(req);
+    const form = await req.formData().catch(() => null);
+    if (!form) throw new HttpError(400, 'Send the photo as multipart/form-data');
 
-    const body = await req.json().catch(() => ({}));
-    const storagePath = typeof body.storagePath === 'string' ? body.storagePath : '';
-    if (!storagePath) throw new HttpError(400, 'storagePath is required');
-
-    const { data: file, error: downloadError } = await caller.supabase.storage
-      .from(RECEIPT_BUCKET)
-      .download(storagePath);
-
-    if (downloadError || !file) throw new HttpError(404, 'Could not read that photo');
+    const file = form.get('file');
+    if (!(file instanceof File)) throw new HttpError(400, 'No photo was attached');
     if (file.size > MAX_IMAGE_BYTES) {
       throw new HttpError(413, 'That photo is too large. Try again at a smaller size.');
     }
@@ -55,14 +47,15 @@ Deno.serve(
     const mediaType = normaliseImageMedia(file.type);
     if (!mediaType) {
       // HEIC lands here: the iPhone default, which the API cannot read. The app
-      // converts to JPEG before upload (see _shared/encoding.ts).
+      // converts to JPEG before sending (see _shared/encoding.ts).
       throw new HttpError(415, "That photo format isn't supported. Try a JPEG or PNG.");
     }
 
-    const categories = await categoryNames(caller);
+    const categories = parseCategories(form.get('categories'));
+    const todayValue = form.get('today');
     const today =
-      typeof body.today === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(body.today)
-        ? body.today
+      typeof todayValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(todayValue)
+        ? todayValue
         : new Date().toISOString().slice(0, 10);
 
     const bytes = new Uint8Array(await file.arrayBuffer());
@@ -99,3 +92,14 @@ Deno.serve(
   })
 );
 
+function parseCategories(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((c): c is string => typeof c === 'string').slice(0, 50)
+      : [];
+  } catch {
+    return [];
+  }
+}

@@ -1,57 +1,36 @@
 /**
- * TanStack Query client and its MMKV-backed cache. ARCHITECTURE.md §1.
+ * TanStack Query client.
  *
- * The cache is persisted so "the app opens with last month's data offline".
- * A month that has already closed does not change, so the defaults lean towards
- * trusting cached data rather than refetching on every focus.
+ * ARCHITECTURE.md §1 paired this with an MMKV-persisted cache so the app would
+ * "open with last month's data offline". That persistence is gone, and not because
+ * it stopped mattering — because it stopped existing as a problem. The data now
+ * lives in SQLite on the device, so every read is already local and already
+ * offline. Persisting a cache of local data would only be a second, staler copy of
+ * the same rows.
+ *
+ * Query still earns its place: it dedupes reads, invalidates after a write, and
+ * keeps the screens declarative.
  */
-import { createMMKV } from 'react-native-mmkv';
 import { QueryClient } from '@tanstack/react-query';
-import { createSyncStoragePersister } from '@tanstack/query-sync-storage-persister';
-import type { Persister } from '@tanstack/react-query-persist-client';
-
-// react-native-mmkv v4 exports a factory; `MMKV` is a type, not a constructor.
-// Created lazily: the web build is backed by localStorage, which does not exist
-// during Expo's static render pass.
-let storage: ReturnType<typeof createMMKV> | null = null;
-
-function getStorage() {
-  if (!storage) storage = createMMKV({ id: 'sholdi.cache' });
-  return storage;
-}
 
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      // A closed month's totals do not change. Five minutes of freshness avoids a
-      // refetch every time the user flicks between tabs.
-      staleTime: 5 * 60 * 1000,
-      gcTime: 7 * 24 * 60 * 60 * 1000,
-      retry: 2,
+      // Reads hit local SQLite, so refetching is cheap — but a closed month's
+      // totals do not change, and nothing invalidates without a write.
+      staleTime: 30 * 1000,
+      retry: 0,
       refetchOnWindowFocus: false,
     },
   },
 });
 
-/**
- * MMKV is synchronous, so the sync persister is the right one. It is created
- * defensively: a storage failure should cost the offline cache, never the app.
- */
-export function createCachePersister(): Persister | null {
-  try {
-    const mmkv = getStorage();
-    return createSyncStoragePersister({
-      storage: {
-        getItem: (key) => mmkv.getString(key) ?? null,
-        setItem: (key, value) => mmkv.set(key, value),
-        removeItem: (key) => void mmkv.remove(key),
-      },
-      throttleTime: 1000,
-    });
-  } catch {
-    return null;
-  }
-}
-
-/** Bump to invalidate every persisted cache after a shape change. */
-export const CACHE_BUSTER = 'v1';
+/** Query keys, in one place so invalidation after a write cannot miss one. */
+export const queryKeys = {
+  categories: ['categories'] as const,
+  monthTotals: (month: string) => ['month-totals', month] as const,
+  monthTotal: (month: string) => ['month-total', month] as const,
+  trailingTotals: (month: string, count: number) => ['trailing-totals', month, count] as const,
+  expenses: (month: string) => ['expenses', month] as const,
+  insights: ['insights'] as const,
+};

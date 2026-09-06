@@ -1,31 +1,30 @@
 /**
  * extract-statement — a bank PDF to many ExtractedExpenses. ARCHITECTURE.md §4.4, §4.5.
  *
- * Build-order step 5. §5 calls the flow this sits in "the flow that must be
- * perfect", so the shape here matters:
+ * §5 calls the flow this sits in "the flow that must be perfect".
  *
- * - The client uploads to Storage first and sends a path, never the file. §4.4:
- *   "Don't push base64 PDFs through the phone twice."
- * - The function downloads server-side and forwards to Anthropic.
- * - Encrypted PDFs are rejected with a clear message — the API cannot read them.
- * - Every row is validated semantically before it is written (§4.3).
+ * Stateless. The phone posts the PDF, this reads it, returns rows, and keeps
+ * nothing — no Storage bucket, no database, no copy. The statement exists here only
+ * for the duration of one request.
  *
- * Input:  { "importId": "uuid" }  — an `imports` row whose storage_path is set
- * Output: { "importId", "expenses": ExtractedExpense[], "issues": [...] }
+ * §4.4 said to upload to Storage first so the file would not cross the phone twice.
+ * With no Storage there is nothing to upload to, and the phone sends it exactly
+ * once — which satisfies the intent of that rule more directly than following it
+ * would have.
  *
- * Not yet handled, and flagged rather than faked: §4.4's page-range chunking for
- * dense statements that exhaust context before the page limit. Single-request
- * extraction covers a normal monthly statement; chunking is a follow-up.
+ * Input:  multipart/form-data with `file` (the PDF), and optional
+ *         `categories` (JSON array) and `period` ({start, end}) fields
+ * Output: { "expenses": ExtractedExpense[], "issues": [...] }
+ *
+ * Not handled, and flagged rather than faked: §4.4's page-range chunking for dense
+ * statements that exhaust context before the page limit.
  */
 import { extractStructured } from '../_shared/anthropic.ts';
 import { EXTRACTED_EXPENSE_LIST_SCHEMA } from '../_shared/extracted.ts';
-import { HttpError, categoryNames, json, requireCaller, serveJson } from '../_shared/auth.ts';
-import type { Caller } from '../_shared/auth.ts';
-import { reconcile, validateExtracted } from '../_shared/validate.ts';
-import { MAX_PDF_BYTES, isEncryptedPdf, isPdf } from '../_shared/pdf.ts';
+import { HttpError, json, serveJson } from '../_shared/http.ts';
 import { toBase64 } from '../_shared/encoding.ts';
-
-const STATEMENT_BUCKET = 'statements';
+import { MAX_PDF_BYTES, isEncryptedPdf, isPdf } from '../_shared/pdf.ts';
+import { reconcile, validateExtracted } from '../_shared/validate.ts';
 
 const SYSTEM = `You read a bank statement and return every purchase on it.
 
@@ -42,114 +41,87 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const caller = await requireCaller(req);
+    const form = await req.formData().catch(() => null);
+    if (!form) throw new HttpError(400, 'Send the statement as multipart/form-data');
 
-    const body = await req.json().catch(() => ({}));
-    const importId = typeof body.importId === 'string' ? body.importId : '';
-    if (!importId) throw new HttpError(400, 'importId is required');
-
-    // RLS scopes this to the caller, so a foreign importId simply is not found.
-    const { data: importRow, error: importError } = await caller.supabase
-      .from('imports')
-      .select('id, storage_path, period_start, period_end, status')
-      .eq('id', importId)
-      .single();
-
-    if (importError || !importRow) throw new HttpError(404, 'Import not found');
-    if (!importRow.storage_path) throw new HttpError(400, 'Import has no uploaded file');
-
-    await setStatus(caller, importId, 'extracting');
-
-    try {
-      const { data: file, error: downloadError } = await caller.supabase.storage
-        .from(STATEMENT_BUCKET)
-        .download(importRow.storage_path);
-
-      if (downloadError || !file) {
-        throw new HttpError(404, 'Could not read the uploaded statement');
-      }
-      if (file.size > MAX_PDF_BYTES) {
-        throw new HttpError(413, 'That statement is too large. Try a single month.');
-      }
-
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      if (!isPdf(bytes)) {
-        // A renamed .docx or a photo would otherwise fail deep inside the model call
-        // with nothing useful to tell the user.
-        throw new HttpError(415, "That file isn't a PDF. Upload the statement your bank gives you.");
-      }
-      if (isEncryptedPdf(bytes)) {
-        // §4.4: reject at the door with a message the user can act on.
-        throw new HttpError(
-          422,
-          'That PDF is password-protected. Save an unprotected copy and upload it again.'
-        );
-      }
-
-      const categories = await categoryNames(caller);
-
-      const result = await extractStructured<{ expenses: unknown }>({
-        system: SYSTEM,
-        schema: EXTRACTED_EXPENSE_LIST_SCHEMA as unknown as Record<string, unknown>,
-        schemaName: 'extracted_expenses',
-        content: [
-          {
-            type: 'document',
-            source: {
-              type: 'base64',
-              media_type: 'application/pdf',
-              data: toBase64(bytes),
-            },
-          },
-          {
-            type: 'text',
-            text: [
-              categories.length
-                ? `The user's categories are: ${categories.join(', ')}.`
-                : 'The user has no categories yet.',
-              'List every purchase on this statement.',
-            ].join('\n'),
-          },
-        ],
-      });
-
-      const { valid, issues } = validateExtracted(result.expenses, {
-        start: importRow.period_start ?? undefined,
-        end: importRow.period_end ?? undefined,
-      });
-
-      const check = reconcile(valid, body.statementTotalCents);
-      if (check && !check.ok) {
-        // Not fatal: the review screen is where a human resolves it. Logged so
-        // extraction accuracy can be tracked from day one (§5).
-        console.warn(
-          `Import ${importId} does not reconcile: off by ${check.differenceCents} cents`
-        );
-      }
-
-      await caller.supabase
-        .from('imports')
-        .update({ status: 'ready', expense_count: valid.length })
-        .eq('id', importId);
-
-      return json({ importId, expenses: valid, issues, reconciliation: check });
-    } catch (error) {
-      const message = error instanceof HttpError ? error.message : 'Extraction failed';
-      await setStatus(caller, importId, 'failed', message);
-      throw error;
+    const file = form.get('file');
+    if (!(file instanceof File)) throw new HttpError(400, 'No file was attached');
+    if (file.size > MAX_PDF_BYTES) {
+      throw new HttpError(413, 'That statement is too large. Try a single month.');
     }
+
+    const bytes = new Uint8Array(await file.arrayBuffer());
+
+    if (!isPdf(bytes)) {
+      // A renamed .docx or a photo would otherwise fail deep inside the model call
+      // with nothing useful to tell the user.
+      throw new HttpError(415, "That file isn't a PDF. Upload the statement your bank gives you.");
+    }
+    if (isEncryptedPdf(bytes)) {
+      // §4.4: reject at the door with a message the user can act on.
+      throw new HttpError(
+        422,
+        'That PDF is password-protected. Save an unprotected copy and upload it again.'
+      );
+    }
+
+    const categories = parseCategories(form.get('categories'));
+    const period = parsePeriod(form.get('period'));
+
+    const result = await extractStructured<{ expenses: unknown }>({
+      system: SYSTEM,
+      schema: EXTRACTED_EXPENSE_LIST_SCHEMA as unknown as Record<string, unknown>,
+      schemaName: 'extracted_expenses',
+      content: [
+        {
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: toBase64(bytes) },
+        },
+        {
+          type: 'text',
+          text: [
+            categories.length
+              ? `The user's categories are: ${categories.join(', ')}.`
+              : 'The user has no categories yet.',
+            'List every purchase on this statement.',
+          ].join('\n'),
+        },
+      ],
+    });
+
+    const { valid, issues } = validateExtracted(result.expenses, period);
+
+    const statementTotal = Number(form.get('statementTotalCents'));
+    const check = reconcile(valid, Number.isFinite(statementTotal) ? statementTotal : undefined);
+    if (check && !check.ok) {
+      // Not fatal: the review screen is where a human resolves it.
+      console.warn(`Statement does not reconcile: off by ${check.differenceCents} cents`);
+    }
+
+    return json({ expenses: valid, issues, reconciliation: check });
   })
 );
 
-async function setStatus(
-  caller: Caller,
-  importId: string,
-  status: string,
-  error?: string
-): Promise<void> {
-  await caller.supabase
-    .from('imports')
-    .update(error ? { status, error } : { status })
-    .eq('id', importId);
+function parseCategories(value: FormDataEntryValue | null): string[] {
+  if (typeof value !== 'string') return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed)
+      ? parsed.filter((c): c is string => typeof c === 'string').slice(0, 50)
+      : [];
+  } catch {
+    return [];
+  }
 }
 
+function parsePeriod(value: FormDataEntryValue | null): { start?: string; end?: string } {
+  if (typeof value !== 'string') return {};
+  try {
+    const parsed = JSON.parse(value) as { start?: unknown; end?: unknown };
+    const iso = (v: unknown) =>
+      typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
+    return { start: iso(parsed.start), end: iso(parsed.end) };
+  } catch {
+    return {};
+  }
+}

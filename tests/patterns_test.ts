@@ -1,6 +1,6 @@
 /**
  * Tests for insight pattern detection. Run with:
- *   deno test supabase/functions/_shared/patterns_test.ts
+ *   deno test tests/patterns_test.ts
  *
  * These matter more than most: this logic decides what a user actually receives, and
  * ARCHITECTURE.md §4.6 caps that at three notes a month. Every false positive here
@@ -8,8 +8,8 @@
  */
 import { assertEquals } from 'jsr:@std/assert@^1.0.0';
 
-import { findPattern, isRising, percentChange, toSeries } from './patterns.ts';
-import type { CategorySeries } from './patterns.ts';
+import { findPattern, isRising, percentChange, toSeries } from '../src/features/insights/patterns.ts';
+import type { CategorySeries } from '../src/features/insights/patterns.ts';
 
 function series(name: string, cents: number[], categoryId = name): CategorySeries {
   return {
