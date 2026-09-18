@@ -27,7 +27,12 @@ export default function AddScreen() {
           <InputTile icon={Mic} title="Say it" subLabel={'“38 euro, Konzum”'} />
         </View>
         <View style={styles.row}>
-          <InputTile icon={Keyboard} title="Type it" subLabel="plain words work" />
+          <InputTile
+            icon={Keyboard}
+            title="Type it"
+            subLabel="plain words work"
+            onPress={() => router.push('/add/type')}
+          />
           <InputTile icon={FileText} title="Bank PDF" subLabel="whole month at once" />
         </View>
       </View>

@@ -9,7 +9,9 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "typecheck": "tsc --noEmit",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "test": "deno test --config tests/deno.json --allow-read tests/",
+    "test:functions": "deno test --config supabase/functions/deno.json supabase/functions/_shared/"
   },
   "dependencies": {
     "@expo-google-fonts/space-grotesk": "^0.4.1",
@@ -44,6 +46,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "deno": "^2.9.6",
     "typescript": "~6.0.3"
   }
 }
