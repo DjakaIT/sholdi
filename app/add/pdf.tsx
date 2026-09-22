@@ -16,7 +16,7 @@
  */
 import { useState } from 'react';
 import { useRouter } from 'expo-router';
-import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
@@ -48,13 +48,13 @@ export default function PdfScreen() {
     }
 
     try {
-      const picked = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        copyToCacheDirectory: true,
-      });
-
-      if (picked.canceled || !picked.assets?.[0]) return;
-      const file = picked.assets[0];
+      // expo-file-system's own picker, not expo-document-picker. Expo Go sandboxes
+      // BOTH file APIs away from DocumentPicker's cache folder, so a file it returns
+      // cannot be read at all in Expo Go. A File produced here is one this library
+      // already owns, so reading it needs no second resolution.
+      const picked = await File.pickFileAsync({ mimeTypes: ['application/pdf'] });
+      if (picked.canceled || !picked.result) return;
+      const file = picked.result;
 
       setBusy(true);
       // A statement takes real time to read. Saying so beats a silent spinner —
@@ -62,7 +62,8 @@ export default function PdfScreen() {
       setStatus('Reading your statement. This takes a moment.');
 
       const names = (categories ?? []).map((c) => c.name);
-      const result = await extractStatement({ uri: file.uri, categories: names });
+      const base64 = await file.base64();
+      const result = await extractStatement({ base64, categories: names });
 
       if (result.expenses.length === 0) {
         // §7: extraction failure needs an exit, not a dead end.
@@ -89,7 +90,7 @@ export default function PdfScreen() {
         rows,
         issues: result.issues ?? [],
         period: rows[0]?.occurred_on?.slice(0, 7) ?? null,
-        sourceName: file.name ?? null,
+        sourceName: null,
       });
 
       // Close the sheet stack first. Navigating from inside a transparentModal

@@ -105,17 +105,18 @@ export type StatementResult = {
 
 /** A bank PDF -> many expenses. This is the flow §5 says must be perfect. */
 export async function extractStatement(input: {
-  uri: string;
+  /** Already-read file contents. The caller owns reading, because how a file can
+   *  be read depends entirely on which picker produced it. */
+  base64: string;
   categories: string[];
   period?: { start?: string; end?: string };
 }): Promise<StatementResult> {
-  const base64 = await readAsBase64(input.uri);
 
   const response = await fetch(endpoint('extract-statement'), {
     method: 'POST',
     headers: { ...authHeaders(), 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      pdfBase64: base64,
+      pdfBase64: input.base64,
       categories: input.categories,
       period: input.period,
     }),
