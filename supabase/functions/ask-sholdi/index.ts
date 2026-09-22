@@ -14,7 +14,7 @@
  *           "summary": "2026-09 — total 184260 cents...\n  Groceries: 77390..." }
  * Output: { "answer": "..." }
  */
-import { anthropic, DEFAULT_MAX_TOKENS, EXTRACTION_MODEL } from '../_shared/anthropic.ts';
+import { getAnthropic, DEFAULT_MAX_TOKENS, EXTRACTION_MODEL } from '../_shared/anthropic.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
 
 const MAX_QUESTION_LENGTH = 500;
@@ -57,7 +57,7 @@ Deno.serve(
     const summary = typeof body.summary === 'string' ? body.summary.slice(0, MAX_SUMMARY_LENGTH) : '';
     if (!summary) throw new HttpError(400, 'No spending summary was sent');
 
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: EXTRACTION_MODEL,
       max_tokens: DEFAULT_MAX_TOKENS,
       system: SYSTEM,

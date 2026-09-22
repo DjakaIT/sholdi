@@ -51,6 +51,13 @@ export function serveJson(handler: (req: Request) => Promise<Response>) {
       if (error instanceof HttpError) {
         return json({ error: error.message }, error.status);
       }
+      // A misconfigured project is the likeliest failure and the least guessable,
+      // so it is named rather than swallowed. It leaks no key material.
+      if (error instanceof Error && error.name === 'MissingApiKeyError') {
+        console.error(error.message);
+        return json({ error: error.message }, 500);
+      }
+
       console.error('Unhandled error:', error);
       return json({ error: 'Something went wrong' }, 500);
     }

@@ -16,7 +16,7 @@
  * Input:  { "brief": "Eating out has fallen two months running.\n2026-07: ..." }
  * Output: { "title": "...", "body": "..." }
  */
-import { anthropic, DEFAULT_MAX_TOKENS, EXTRACTION_MODEL } from '../_shared/anthropic.ts';
+import { getAnthropic, DEFAULT_MAX_TOKENS, EXTRACTION_MODEL } from '../_shared/anthropic.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
 
 const MAX_BRIEF_LENGTH = 2000;
@@ -53,7 +53,7 @@ Deno.serve(
     if (!brief) throw new HttpError(400, 'No pattern brief was sent');
     if (brief.length > MAX_BRIEF_LENGTH) throw new HttpError(400, 'That brief is too long');
 
-    const written = await anthropic.messages.create({
+    const written = await getAnthropic().messages.create({
       model: EXTRACTION_MODEL,
       max_tokens: DEFAULT_MAX_TOKENS,
       system: SYSTEM,

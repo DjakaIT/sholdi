@@ -15,16 +15,37 @@
  */
 import Anthropic from 'npm:@anthropic-ai/sdk@^0.123.0';
 
-const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+/**
+ * The client is created on first use, not at module load.
+ *
+ * Throwing at module scope kills the worker before the handler runs, and Supabase
+ * reports that as a bare `WORKER_ERROR` with no cause — so a missing secret, the
+ * single most likely setup mistake, produced the least informative possible error.
+ * Deferring it means the handler is alive to return a message that says what to do.
+ */
+let client: Anthropic | null = null;
 
-if (!apiKey) {
-  throw new Error(
-    'ANTHROPIC_API_KEY is not set. Set it as a function secret: ' +
-      'supabase secrets set ANTHROPIC_API_KEY=sk-ant-...'
-  );
+export function getAnthropic(): Anthropic {
+  if (client) return client;
+
+  const apiKey = Deno.env.get('ANTHROPIC_API_KEY');
+  if (!apiKey) {
+    throw new MissingApiKeyError();
+  }
+
+  client = new Anthropic({ apiKey });
+  return client;
 }
 
-export const anthropic = new Anthropic({ apiKey });
+export class MissingApiKeyError extends Error {
+  constructor() {
+    super(
+      'ANTHROPIC_API_KEY is not set on this project. Run: ' +
+        'supabase secrets set ANTHROPIC_API_KEY=sk-ant-...'
+    );
+    this.name = 'MissingApiKeyError';
+  }
+}
 
 /**
  * §4.3 pins the model for extraction, chat and insights alike. Kept here so there
@@ -60,7 +81,7 @@ export async function extractStructured<T>({
   maxTokens = DEFAULT_MAX_TOKENS,
 }: StructuredRequest): Promise<T> {
   try {
-    const response = await anthropic.messages.create({
+    const response = await getAnthropic().messages.create({
       model: EXTRACTION_MODEL,
       max_tokens: maxTokens,
       system,
@@ -92,7 +113,7 @@ async function extractViaTool<T>({
   schemaName,
   maxTokens = DEFAULT_MAX_TOKENS,
 }: StructuredRequest): Promise<T> {
-  const response = await anthropic.messages.create({
+  const response = await getAnthropic().messages.create({
     model: EXTRACTION_MODEL,
     max_tokens: maxTokens,
     system,
