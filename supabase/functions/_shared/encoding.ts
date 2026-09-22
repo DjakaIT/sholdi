@@ -44,3 +44,17 @@ export function normaliseImageMedia(type: string | undefined): SupportedImageMed
     ? (lower as SupportedImageMedia)
     : null;
 }
+
+/**
+ * base64 back to bytes.
+ *
+ * Only needed so the PDF magic-number and /Encrypt checks can run. The payload
+ * itself is forwarded to the API as the original base64 string — decoding and
+ * re-encoding it would be pure waste on a multi-megabyte statement.
+ */
+export function fromBase64(value: string): Uint8Array {
+  const binary = atob(value);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}

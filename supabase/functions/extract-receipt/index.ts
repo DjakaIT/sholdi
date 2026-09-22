@@ -14,7 +14,7 @@ import { extractStructured } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
-import { normaliseImageMedia, toBase64 } from '../_shared/encoding.ts';
+import { fromBase64, normaliseImageMedia } from '../_shared/encoding.ts';
 import { validateExtracted } from '../_shared/validate.ts';
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
@@ -36,30 +36,30 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const form = await req.formData().catch(() => null);
-    if (!form) throw new HttpError(400, 'Send the photo as multipart/form-data');
-
-    const file = form.get('file');
-    if (!(file instanceof File)) throw new HttpError(400, 'No photo was attached');
-    if (file.size > MAX_IMAGE_BYTES) {
-      throw new HttpError(413, 'That photo is too large. Try again at a smaller size.');
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body.imageBase64 !== 'string' || !body.imageBase64) {
+      throw new HttpError(400, 'No photo was sent');
     }
 
-    const mediaType = normaliseImageMedia(file.type);
+    const mediaType = normaliseImageMedia(body.mimeType);
     if (!mediaType) {
       // HEIC lands here: the iPhone default, which the API cannot read. The app
       // converts to JPEG before sending (see _shared/encoding.ts).
       throw new HttpError(415, "That photo format isn't supported. Try a JPEG or PNG.");
     }
 
-    const categories = parseCategories(form.get('categories'));
-    const todayValue = form.get('today');
-    const today =
-      typeof todayValue === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(todayValue)
-        ? todayValue
-        : new Date().toISOString().slice(0, 10);
+    // Decoded only to check the size; the API gets the original base64 string.
+    if (fromBase64(body.imageBase64).length > MAX_IMAGE_BYTES) {
+      throw new HttpError(413, 'That photo is too large. Try again at a smaller size.');
+    }
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    const categories = Array.isArray(body.categories)
+      ? body.categories.filter((c: unknown): c is string => typeof c === 'string').slice(0, 50)
+      : [];
+    const today =
+      typeof body.today === 'string' && /^d{4}-d{2}-d{2}$/.test(body.today)
+        ? body.today
+        : new Date().toISOString().slice(0, 10);
 
     const extracted = await extractStructured<Record<string, unknown>>({
       system: SYSTEM,
@@ -70,7 +70,7 @@ Deno.serve(
       content: [
         {
           type: 'image',
-          source: { type: 'base64', media_type: mediaType, data: toBase64(bytes) },
+          source: { type: 'base64', media_type: mediaType, data: body.imageBase64 },
         },
         {
           type: 'text',
@@ -94,14 +94,3 @@ Deno.serve(
   })
 );
 
-function parseCategories(value: FormDataEntryValue | null): string[] {
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed)
-      ? parsed.filter((c): c is string => typeof c === 'string').slice(0, 50)
-      : [];
-  } catch {
-    return [];
-  }
-}

@@ -14,6 +14,8 @@
  *  - a short note being parsed
  *  - aggregated monthly totals, for a question or an insight — never individual rows
  */
+import { File } from 'expo-file-system';
+
 import type { ExtractedExpense } from '@/features/expenses/types';
 
 const functionsUrl = process.env.EXPO_PUBLIC_FUNCTIONS_URL;
@@ -74,20 +76,21 @@ export async function extractReceipt(input: {
   categories: string[];
   today: string;
 }): Promise<ExtractedExpense> {
-  const form = new FormData();
-  // React Native's FormData takes this {uri, name, type} shape for a local file.
-  form.append('file', {
-    uri: input.uri,
-    name: 'receipt.jpg',
-    type: input.mimeType,
-  } as unknown as Blob);
-  form.append('categories', JSON.stringify(input.categories));
-  form.append('today', input.today);
+  // Base64 JSON rather than multipart. React Native's FormData rejects file parts
+  // it cannot serialise ("unsupported FormDataPart implementation"), and the
+  // Messages API wants base64 regardless — so this avoids a translation that only
+  // ever existed to satisfy the transport.
+  const base64 = await new File(input.uri).base64();
 
   const response = await fetch(endpoint('extract-receipt'), {
     method: 'POST',
-    headers: authHeaders(),
-    body: form,
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      imageBase64: base64,
+      mimeType: input.mimeType,
+      categories: input.categories,
+      today: input.today,
+    }),
   });
 
   if (!response.ok) throw new Error(await readError(response));
@@ -106,19 +109,16 @@ export async function extractStatement(input: {
   categories: string[];
   period?: { start?: string; end?: string };
 }): Promise<StatementResult> {
-  const form = new FormData();
-  form.append('file', {
-    uri: input.uri,
-    name: 'statement.pdf',
-    type: 'application/pdf',
-  } as unknown as Blob);
-  form.append('categories', JSON.stringify(input.categories));
-  if (input.period) form.append('period', JSON.stringify(input.period));
+  const base64 = await new File(input.uri).base64();
 
   const response = await fetch(endpoint('extract-statement'), {
     method: 'POST',
-    headers: authHeaders(),
-    body: form,
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pdfBase64: base64,
+      categories: input.categories,
+      period: input.period,
+    }),
   });
 
   if (!response.ok) throw new Error(await readError(response));

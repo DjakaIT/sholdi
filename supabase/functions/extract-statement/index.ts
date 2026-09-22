@@ -23,7 +23,7 @@ import { extractStructured } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_LIST_SCHEMA } from '../_shared/extracted.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
-import { toBase64 } from '../_shared/encoding.ts';
+import { fromBase64 } from '../_shared/encoding.ts';
 import { MAX_PDF_BYTES, isEncryptedPdf, isPdf } from '../_shared/pdf.ts';
 import { reconcile, validateExtracted } from '../_shared/validate.ts';
 
@@ -42,17 +42,18 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const form = await req.formData().catch(() => null);
-    if (!form) throw new HttpError(400, 'Send the statement as multipart/form-data');
-
-    const file = form.get('file');
-    if (!(file instanceof File)) throw new HttpError(400, 'No file was attached');
-    if (file.size > MAX_PDF_BYTES) {
-      throw new HttpError(413, 'That statement is too large. Try a single month.');
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body.pdfBase64 !== 'string' || !body.pdfBase64) {
+      throw new HttpError(400, 'No statement was sent');
     }
 
-    const bytes = new Uint8Array(await file.arrayBuffer());
+    // Decoded only so the checks below can run; the API is handed the original
+    // base64 string, so nothing is re-encoded.
+    const bytes = fromBase64(body.pdfBase64);
 
+    if (bytes.length > MAX_PDF_BYTES) {
+      throw new HttpError(413, 'That statement is too large. Try a single month.');
+    }
     if (!isPdf(bytes)) {
       // A renamed .docx or a photo would otherwise fail deep inside the model call
       // with nothing useful to tell the user.
@@ -66,8 +67,10 @@ Deno.serve(
       );
     }
 
-    const categories = parseCategories(form.get('categories'));
-    const period = parsePeriod(form.get('period'));
+    const categories = Array.isArray(body.categories)
+      ? body.categories.filter((c: unknown): c is string => typeof c === 'string').slice(0, 50)
+      : [];
+    const period = parsePeriod(body.period);
 
     const result = await extractStructured<{ expenses: unknown }>({
       system: SYSTEM,
@@ -78,7 +81,7 @@ Deno.serve(
       content: [
         {
           type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: toBase64(bytes) },
+          source: { type: 'base64', media_type: 'application/pdf', data: body.pdfBase64 },
         },
         {
           type: 'text',
@@ -94,7 +97,7 @@ Deno.serve(
 
     const { valid, issues } = validateExtracted(result.expenses, period);
 
-    const statementTotal = Number(form.get('statementTotalCents'));
+    const statementTotal = Number(body.statementTotalCents);
     const check = reconcile(valid, Number.isFinite(statementTotal) ? statementTotal : undefined);
     if (check && !check.ok) {
       // Not fatal: the review screen is where a human resolves it.
@@ -105,26 +108,11 @@ Deno.serve(
   })
 );
 
-function parseCategories(value: FormDataEntryValue | null): string[] {
-  if (typeof value !== 'string') return [];
-  try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed)
-      ? parsed.filter((c): c is string => typeof c === 'string').slice(0, 50)
-      : [];
-  } catch {
-    return [];
-  }
-}
 
-function parsePeriod(value: FormDataEntryValue | null): { start?: string; end?: string } {
-  if (typeof value !== 'string') return {};
-  try {
-    const parsed = JSON.parse(value) as { start?: unknown; end?: unknown };
-    const iso = (v: unknown) =>
-      typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
-    return { start: iso(parsed.start), end: iso(parsed.end) };
-  } catch {
-    return {};
-  }
+function parsePeriod(value: unknown): { start?: string; end?: string } {
+  if (typeof value !== 'object' || value === null) return {};
+  const { start, end } = value as { start?: unknown; end?: unknown };
+  const iso = (v: unknown) =>
+    typeof v === 'string' && /^d{4}-d{2}-d{2}$/.test(v) ? v : undefined;
+  return { start: iso(start), end: iso(end) };
 }
