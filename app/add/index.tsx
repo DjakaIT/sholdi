@@ -23,7 +23,12 @@ export default function AddScreen() {
 
       <View style={styles.grid}>
         <View style={styles.row}>
-          <InputTile icon={Scan} title="Scan" subLabel="a receipt" />
+          <InputTile
+            icon={Scan}
+            title="Scan"
+            subLabel="a receipt"
+            onPress={() => router.push('/add/scan')}
+          />
           <InputTile icon={Mic} title="Say it" subLabel={'“38 euro, Konzum”'} />
         </View>
         <View style={styles.row}>
@@ -33,13 +38,19 @@ export default function AddScreen() {
             subLabel="plain words work"
             onPress={() => router.push('/add/type')}
           />
-          <InputTile icon={FileText} title="Bank PDF" subLabel="whole month at once" />
+          <InputTile
+            icon={FileText}
+            title="Bank PDF"
+            subLabel="whole month at once"
+            onPress={() => router.push('/add/pdf')}
+          />
         </View>
       </View>
 
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="or drop any photo"
+        onPress={() => router.push('/add/scan?mode=photo')}
         style={styles.catchAll}>
         <Text style={styles.catchAllText}>or drop any photo</Text>
       </Pressable>

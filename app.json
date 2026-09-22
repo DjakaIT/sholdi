@@ -26,7 +26,14 @@
       "expo-router",
       "expo-font",
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Sholdi reads receipts and photos you choose. They are never stored.",
+          "cameraPermission": "Sholdi uses the camera to scan a receipt. Photos are never stored."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true
