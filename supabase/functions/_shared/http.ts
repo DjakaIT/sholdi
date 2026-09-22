@@ -53,13 +53,22 @@ export function serveJson(handler: (req: Request) => Promise<Response>) {
       }
       // A misconfigured project is the likeliest failure and the least guessable,
       // so it is named rather than swallowed. It leaks no key material.
+      if (error instanceof Error && error.name === 'TruncatedResponseError') {
+        console.error(error.message);
+        return json({ error: error.message }, 413);
+      }
+
       if (error instanceof Error && error.name === 'MissingApiKeyError') {
         console.error(error.message);
         return json({ error: error.message }, 500);
       }
 
+      // Include the cause. These messages describe request shape, not secrets —
+      // the API key never appears in one — and an opaque "Something went wrong"
+      // makes a deployed function undebuggable without log access.
       console.error('Unhandled error:', error);
-      return json({ error: 'Something went wrong' }, 500);
+      const detail = error instanceof Error ? error.message : String(error);
+      return json({ error: 'Something went wrong', detail: detail.slice(0, 500) }, 500);
     }
   };
 }

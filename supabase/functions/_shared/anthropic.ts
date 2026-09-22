@@ -37,6 +37,22 @@ export function getAnthropic(): Anthropic {
   return client;
 }
 
+/**
+ * The model ran out of room mid-answer.
+ *
+ * Worth its own type: it means the request was too big for its cap, which is a
+ * different problem from the model failing, and it has a different fix.
+ */
+export class TruncatedResponseError extends Error {
+  constructor(readonly maxTokens: number) {
+    super(
+      `The statement was too long to read in one pass (hit the ${maxTokens}-token limit). ` +
+        'Try a single month.'
+    );
+    this.name = 'TruncatedResponseError';
+  }
+}
+
 export class MissingApiKeyError extends Error {
   constructor() {
     super(
@@ -61,6 +77,20 @@ export type StructuredRequest = {
 };
 
 /**
+ * Extraction runs with thinking OFF.
+ *
+ * Sonnet 5 runs adaptive thinking by default and those tokens count against
+ * max_tokens — so reasoning consumed the budget before the answer could be
+ * written, and a 79-row statement truncated inside a cap that had ample room for
+ * the rows themselves (~1,400 tokens). Reading a table off a statement is not a
+ * task that benefits from deliberation, so this both fixes the truncation and
+ * removes tokens nobody was paying for on purpose.
+ *
+ * Chat and insights keep thinking: there the quality of the reasoning is the point.
+ */
+const NO_THINKING = { type: 'disabled' } as const;
+
+/**
  * Ask for a JSON object matching `schema`.
  *
  * Primary path: structured outputs, which constrain generation so the response
@@ -82,11 +112,19 @@ export async function extractStructured<T>({
       max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content }],
+      thinking: NO_THINKING,
       // JSONOutputFormat takes `type` and `schema` only — no name.
       output_config: {
         format: { type: 'json_schema', schema },
       },
     });
+
+    // A response cut off at max_tokens is truncated JSON. Parsing it throws a
+    // syntax error that says nothing about the real cause, so the cap is checked
+    // first — this is the failure mode the compact wire format exists to avoid.
+    if (response.stop_reason === 'max_tokens') {
+      throw new TruncatedResponseError(maxTokens);
+    }
 
     const text = firstText(response);
     if (!text) throw new Error('Structured output returned no text block');
@@ -115,6 +153,7 @@ async function extractViaTool<T>({
     max_tokens: maxTokens,
     system,
     messages: [{ role: 'user', content }],
+    thinking: NO_THINKING,
     tools: [
       {
         name: schemaName,
@@ -126,6 +165,8 @@ async function extractViaTool<T>({
     ],
     tool_choice: { type: 'tool', name: schemaName },
   });
+
+  if (response.stop_reason === 'max_tokens') throw new TruncatedResponseError(maxTokens);
 
   const block = response.content.find((b) => b.type === 'tool_use');
   if (!block || block.type !== 'tool_use') {

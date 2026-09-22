@@ -1,5 +1,5 @@
 /**
- * extract-statement — a bank PDF to many ExtractedExpenses. ARCHITECTURE.md §4.4, §4.5.
+ * extract-statement — a bank PDF to many transactions. ARCHITECTURE.md §4.4, §4.5.
  *
  * §5 calls the flow this sits in "the flow that must be perfect".
  *
@@ -7,21 +7,28 @@
  * nothing — no Storage bucket, no database, no copy. The statement exists here only
  * for the duration of one request.
  *
- * §4.4 said to upload to Storage first so the file would not cross the phone twice.
- * With no Storage there is nothing to upload to, and the phone sends it exactly
- * once — which satisfies the intent of that rule more directly than following it
- * would have.
+ * Output uses the COMPACT wire format (COST-CONTROLS.md §2), which §11 makes
+ * mandatory for this function. That is not a micro-optimisation: on a real
+ * 79-transaction statement the verbose ExtractedExpense form exceeded the 4000-token
+ * cap, truncated mid-object, and failed the entire import with unparseable JSON.
+ * Expansion back to the §4.2 contract happens here, where it is free.
  *
- * Input:  multipart/form-data with `file` (the PDF), and optional
- *         `categories` (JSON array) and `period` ({start, end}) fields
- * Output: { "expenses": ExtractedExpense[], "issues": [...] }
+ * Input:  { pdfBase64, categories?: string[], period?: {start,end}, statementTotalCents? }
+ * Output: { expenses: ExtractedExpense[], issues, reconciliation, dropped }
  *
- * Not handled, and flagged rather than faked: §4.4's page-range chunking for dense
- * statements that exhaust context before the page limit.
+ * ⚠ Known gap: §4.2 now wants text-based bank PDFs parsed deterministically
+ * on-device, one parser per bank, with only unknown merchant names reaching the
+ * model. That parser does not exist yet, so the PDF still goes to the model.
  */
 import { extractStructured } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
-import { EXTRACTED_EXPENSE_LIST_SCHEMA } from '../_shared/extracted.ts';
+import {
+  COMPACT_STATEMENT_SCHEMA,
+  buildCategoryCodes,
+  describeCategoryCodes,
+  expandCompact,
+} from '../_shared/compact.ts';
+import type { CompactStatement } from '../_shared/compact.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
 import { fromBase64 } from '../_shared/encoding.ts';
 import { MAX_PDF_BYTES, isEncryptedPdf, isPdf } from '../_shared/pdf.ts';
@@ -29,15 +36,18 @@ import { reconcile, validateExtracted } from '../_shared/validate.ts';
 
 const SYSTEM = `You read a bank statement and return every purchase on it.
 
+Return each purchase as a positional array, in EXACTLY this order:
+  [amount_cents, merchant, "MM-DD", category_code, confidence_pct]
+
 Rules:
-- amount_cents is a whole number of cents. 12.30 EUR is 1230. Never a decimal.
+- amount_cents is a POSITIVE whole number of cents. 12,30 EUR is 1230. Never a decimal.
+- merchant is the recognisable name only. Drop card numbers, terminal ids, city names
+  and reference codes: "KONZUM 4471 ZADAR" becomes "Konzum".
+- "MM-DD" is the transaction date. Never include the year; it comes from the period.
+- category_code is one of the codes supplied below.
+- confidence_pct is an integer from 0 to 100.
 - Return only money leaving the account. Skip incoming transfers, salary, refunds,
-  interest, and the account's own balance lines.
-- occurred_on is the transaction date as YYYY-MM-DD, taken from the statement.
-- Clean the merchant name: drop card numbers, terminal ids and reference codes,
-  keep the recognisable name.
-- Pick suggested_category from the user's existing categories when one fits.
-- confidence per row. Lower it when a line is ambiguous or the amount is unclear.
+  interest, round-ups, and the account's own balance lines.
 - Do not invent transactions. If a line is unreadable, leave it out rather than guess.`;
 
 Deno.serve(
@@ -67,15 +77,17 @@ Deno.serve(
       );
     }
 
-    const categories = Array.isArray(body.categories)
+    const categories: string[] = Array.isArray(body.categories)
       ? body.categories.filter((c: unknown): c is string => typeof c === 'string').slice(0, 50)
       : [];
     const period = parsePeriod(body.period);
 
-    const result = await extractStructured<{ expenses: unknown }>({
+    const codeMap = buildCategoryCodes(categories);
+
+    const compact = await extractStructured<CompactStatement>({
       system: SYSTEM,
-      schema: EXTRACTED_EXPENSE_LIST_SCHEMA as unknown as Record<string, unknown>,
-      schemaName: 'extracted_expenses',
+      schema: COMPACT_STATEMENT_SCHEMA as unknown as Record<string, unknown>,
+      schemaName: 'statement',
       model: MODELS.statement,
       maxTokens: MAX_TOKENS.statement,
       content: [
@@ -86,16 +98,18 @@ Deno.serve(
         {
           type: 'text',
           text: [
-            categories.length
-              ? `The user's categories are: ${categories.join(', ')}.`
-              : 'The user has no categories yet.',
+            `Category codes: ${describeCategoryCodes(codeMap)}`,
             'List every purchase on this statement.',
           ].join('\n'),
         },
       ],
     });
 
-    const { valid, issues } = validateExtracted(result.expenses, period);
+    // Positional arrays back into the §4.2 contract.
+    const { expenses, dropped } = expandCompact(compact, codeMap);
+
+    // Shape is guaranteed by the schema; truth is not (§4.3).
+    const { valid, issues } = validateExtracted(expenses, period);
 
     const statementTotal = Number(body.statementTotalCents);
     const check = reconcile(valid, Number.isFinite(statementTotal) ? statementTotal : undefined);
@@ -104,15 +118,18 @@ Deno.serve(
       console.warn(`Statement does not reconcile: off by ${check.differenceCents} cents`);
     }
 
-    return json({ expenses: valid, issues, reconciliation: check });
+    console.log(
+      `extract-statement: ${valid.length} kept, ${issues.length} rejected, ${dropped} unexpandable`
+    );
+
+    return json({ expenses: valid, issues, reconciliation: check, dropped });
   })
 );
-
 
 function parsePeriod(value: unknown): { start?: string; end?: string } {
   if (typeof value !== 'object' || value === null) return {};
   const { start, end } = value as { start?: unknown; end?: unknown };
   const iso = (v: unknown) =>
-    typeof v === 'string' && /^d{4}-d{2}-d{2}$/.test(v) ? v : undefined;
+    typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
   return { start: iso(start), end: iso(end) };
 }
