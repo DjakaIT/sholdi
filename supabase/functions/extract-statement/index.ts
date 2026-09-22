@@ -20,6 +20,7 @@
  * statements that exhaust context before the page limit.
  */
 import { extractStructured } from '../_shared/anthropic.ts';
+import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_LIST_SCHEMA } from '../_shared/extracted.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
 import { toBase64 } from '../_shared/encoding.ts';
@@ -72,6 +73,8 @@ Deno.serve(
       system: SYSTEM,
       schema: EXTRACTED_EXPENSE_LIST_SCHEMA as unknown as Record<string, unknown>,
       schemaName: 'extracted_expenses',
+      model: MODELS.statement,
+      maxTokens: MAX_TOKENS.statement,
       content: [
         {
           type: 'document',

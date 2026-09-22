@@ -114,9 +114,9 @@ export type ImportResult = {
 /**
  * Restore from a file the user picks.
  *
- * `merge` deduplicates on the same key the statement importer uses (§7):
- * occurred_on + amount_cents + merchant. Restoring the same backup twice must not
- * double someone's spending history.
+ * `merge` matches on row id, which a backup preserves. Restoring the same backup
+ * twice must not double a history, and id equality settles that exactly — no
+ * heuristic, and no risk of collapsing two genuinely identical purchases (§7).
  */
 export async function importBackup(
   passphrase: string,
@@ -179,11 +179,15 @@ export async function restore(
 
     for (const expense of contents.expenses) {
       if (mode === 'merge') {
+        // Match on id, not on date + amount + merchant.
+        //
+        // ARCHITECTURE.md §7: "two identical €6,70 canteen lunches on the same day
+        // are two real purchases" — that tuple silently deletes the second one. A
+        // backup carries the original ids, so identity here is exact and needs no
+        // heuristic at all.
         const duplicate = await db.getFirstAsync<{ id: string }>(
-          `SELECT id FROM expenses
-            WHERE occurred_on = ? AND amount_cents = ? AND merchant IS ?
-            LIMIT 1`,
-          [expense.occurred_on, expense.amount_cents, expense.merchant]
+          'SELECT id FROM expenses WHERE id = ? LIMIT 1',
+          [expense.id]
         );
         if (duplicate) {
           result.expensesSkipped += 1;

@@ -47,14 +47,6 @@ export class MissingApiKeyError extends Error {
   }
 }
 
-/**
- * §4.3 pins the model for extraction, chat and insights alike. Kept here so there
- * is one place to change it.
- */
-export const EXTRACTION_MODEL = 'claude-sonnet-5';
-
-/** Non-streaming default; large enough that a full statement will not truncate. */
-export const DEFAULT_MAX_TOKENS = 16000;
 
 export type StructuredRequest = {
   system: string;
@@ -62,7 +54,10 @@ export type StructuredRequest = {
   schema: Record<string, unknown>;
   /** Names the shape for the model; also the tool name in the fallback path. */
   schemaName: string;
-  maxTokens?: number;
+  /** From MODELS in models.ts. Never an inline string (COST-CONTROLS.md §11). */
+  model: string;
+  /** From MAX_TOKENS. Every call sets one explicitly (§11). */
+  maxTokens: number;
 };
 
 /**
@@ -78,11 +73,12 @@ export async function extractStructured<T>({
   content,
   schema,
   schemaName,
-  maxTokens = DEFAULT_MAX_TOKENS,
+  model,
+  maxTokens,
 }: StructuredRequest): Promise<T> {
   try {
     const response = await getAnthropic().messages.create({
-      model: EXTRACTION_MODEL,
+      model,
       max_tokens: maxTokens,
       system,
       messages: [{ role: 'user', content }],
@@ -99,7 +95,7 @@ export async function extractStructured<T>({
     if (error instanceof Anthropic.BadRequestError) {
       // The structured-output surface moves; the tool path is the stable one.
       console.warn('Structured outputs rejected, falling back to tool use:', error.message);
-      return await extractViaTool<T>({ system, content, schema, schemaName, maxTokens });
+      return await extractViaTool<T>({ system, content, schema, schemaName, model, maxTokens });
     }
     throw error;
   }
@@ -111,10 +107,11 @@ async function extractViaTool<T>({
   content,
   schema,
   schemaName,
-  maxTokens = DEFAULT_MAX_TOKENS,
+  model,
+  maxTokens,
 }: StructuredRequest): Promise<T> {
   const response = await getAnthropic().messages.create({
-    model: EXTRACTION_MODEL,
+    model,
     max_tokens: maxTokens,
     system,
     messages: [{ role: 'user', content }],

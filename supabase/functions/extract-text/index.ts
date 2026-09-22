@@ -13,6 +13,7 @@
  * Output: { "expense": ExtractedExpense }
  */
 import { extractStructured } from '../_shared/anthropic.ts';
+import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
 import { HttpError, categoryNamesFrom, json, serveJson, todayFrom } from '../_shared/http.ts';
 import { validateExtracted } from '../_shared/validate.ts';
@@ -50,7 +51,8 @@ Deno.serve(
       system: SYSTEM,
       schema: EXTRACTED_EXPENSE_SCHEMA as unknown as Record<string, unknown>,
       schemaName: 'extracted_expense',
-      maxTokens: 1024,
+      model: MODELS.text,
+      maxTokens: MAX_TOKENS.text,
       content: [
         {
           type: 'text',
