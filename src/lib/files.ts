@@ -1,35 +1,67 @@
 /**
  * Reading a file the user picked.
  *
- * This is fiddlier than it looks on Android, which is why it is one function
- * rather than a call site.
+ * This is far fiddlier than it looks, which is why it is one function with a
+ * fallback chain rather than a call site with a single API.
  *
- * A document picker returns a `content://` URI, not a path. Android grants read
- * permission on that URI to the process **transiently** — it is scoped to the
- * picker result and can be gone by the time you read it again. The new
- * `expo-file-system` `File` class expects something it can open directly and
- * rejects a content URI with:
+ * There are two file APIs and neither one reads every URI a picker can return:
  *
- *   Call to function 'FileSystemFile.base64' has been rejected.
- *   Caused by: Missing 'READ' permission for accessing the file.
+ *  - The new `File` class takes an absolute path and reads it directly. It cannot
+ *    resolve an Android `content://` URI, and fails with
+ *    "Missing 'READ' permission for accessing the file".
  *
- * The legacy `readAsStringAsync` goes through Android's ContentResolver, which is
- * what actually knows how to resolve a content URI, and it handles `file://` on
- * both platforms too. So it is the correct tool here, "legacy" name
- * notwithstanding.
+ *  - The legacy `readAsStringAsync` goes through Android's ContentResolver, so it
+ *    *can* resolve `content://`. But inside Expo Go it is sandboxed to the
+ *    experience's own scoped directories, and DocumentPicker's cache folder
+ *    (`/data/user/0/host.exp.exponent/cache/DocumentPicker/...`) sits outside it —
+ *    giving "Location ... isn't readable" for a path that plainly exists.
+ *
+ * Which one works depends on the picker, the platform, and whether the app is
+ * running in Expo Go or a development build. Rather than predict that, both are
+ * attempted and the first success wins. If both fail, the error names both causes
+ * instead of surfacing whichever happened to be tried last.
  */
+import { File } from 'expo-file-system';
 import * as LegacyFileSystem from 'expo-file-system/legacy';
 
-/**
- * Read any picked file as base64.
- *
- * Accepts `file://`, `content://` (Android) and `ph://`-style URIs, because that
- * is what the pickers actually hand back.
- */
+/** Read any picked file as base64, whatever kind of URI it is. */
 export async function readAsBase64(uri: string): Promise<string> {
-  return await LegacyFileSystem.readAsStringAsync(uri, {
-    encoding: LegacyFileSystem.EncodingType.Base64,
-  });
+  const failures: string[] = [];
+
+  // A content:// URI can only be resolved by ContentResolver, so try that first
+  // when we can see that is what we have.
+  const strategies: { name: string; run: () => Promise<string> }[] = uri.startsWith('content://')
+    ? [legacyStrategy(uri), fileStrategy(uri)]
+    : [fileStrategy(uri), legacyStrategy(uri)];
+
+  for (const strategy of strategies) {
+    try {
+      const result = await strategy.run();
+      if (result) return result;
+      failures.push(`${strategy.name}: returned nothing`);
+    } catch (error) {
+      failures.push(`${strategy.name}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  throw new Error(`Could not read that file.\n${failures.join('\n')}`);
+}
+
+function fileStrategy(uri: string) {
+  return {
+    name: 'File.base64',
+    run: async () => await new File(uri).base64(),
+  };
+}
+
+function legacyStrategy(uri: string) {
+  return {
+    name: 'readAsStringAsync',
+    run: async () =>
+      await LegacyFileSystem.readAsStringAsync(uri, {
+        encoding: LegacyFileSystem.EncodingType.Base64,
+      }),
+  };
 }
 
 /** Size in bytes, or null when the file cannot be stat'd. */
