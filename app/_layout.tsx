@@ -88,6 +88,15 @@ export default function RootLayout() {
                 contentStyle: { backgroundColor: 'transparent' },
               }}
             />
+            {/*
+              Declared explicitly so it gets an opaque background. It is reached from
+              inside the Add sheet, and an undeclared route inherits that modal card
+              -- which renders as a blank screen.
+            */}
+            <Stack.Screen
+              name="import/[importId]"
+              options={{ contentStyle: { backgroundColor: colors.page } }}
+            />
           </Stack>
         </ThemeProvider>
       </SafeAreaProvider>

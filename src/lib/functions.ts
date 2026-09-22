@@ -14,7 +14,7 @@
  *  - a short note being parsed
  *  - aggregated monthly totals, for a question or an insight — never individual rows
  */
-import { File } from 'expo-file-system';
+import { readAsBase64 } from '@/lib/files';
 
 import type { ExtractedExpense } from '@/features/expenses/types';
 
@@ -80,7 +80,7 @@ export async function extractReceipt(input: {
   // it cannot serialise ("unsupported FormDataPart implementation"), and the
   // Messages API wants base64 regardless — so this avoids a translation that only
   // ever existed to satisfy the transport.
-  const base64 = await new File(input.uri).base64();
+  const base64 = await readAsBase64(input.uri);
 
   const response = await fetch(endpoint('extract-receipt'), {
     method: 'POST',
@@ -109,7 +109,7 @@ export async function extractStatement(input: {
   categories: string[];
   period?: { start?: string; end?: string };
 }): Promise<StatementResult> {
-  const base64 = await new File(input.uri).base64();
+  const base64 = await readAsBase64(input.uri);
 
   const response = await fetch(endpoint('extract-statement'), {
     method: 'POST',

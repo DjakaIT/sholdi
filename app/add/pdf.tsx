@@ -92,9 +92,13 @@ export default function PdfScreen() {
         sourceName: file.name ?? null,
       });
 
-      // Replace rather than push: the sheet should not sit behind the review screen.
-      router.replace('/import/new');
+      // Close the sheet stack first. Navigating from inside a transparentModal
+      // leaves the destination rendering on that modal's transparent card, which
+      // reads as a blank screen.
+      router.dismissAll();
+      router.push('/import/new');
     } catch (pdfError) {
+      console.error('Bank PDF import failed:', pdfError);
       setError(
         pdfError instanceof Error ? pdfError.message : "Couldn't read that statement."
       );
