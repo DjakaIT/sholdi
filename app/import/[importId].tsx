@@ -19,6 +19,7 @@ import { Button } from '@/components/Button';
 import { ExtractedRow } from '@/components/ExtractedRow';
 import { useCategories } from '@/features/expenses/hooks';
 import { importExpenses } from '@/features/expenses/repository';
+import { rememberAll } from '@/features/transactions/merchantMemory';
 import { monthName } from '@/lib/dates';
 import { useImportStore } from '@/stores/useImportStore';
 import { useMonthStore } from '@/stores/useMonthStore';
@@ -62,6 +63,15 @@ export default function ImportReviewScreen() {
         rows.map((row) => ({ ...row, categoryId: row.categoryId, needsReview: row.needs_review })),
         null,
         'pdf'
+      );
+
+      // COST-CONTROLS.md §3: what the user accepted becomes memory, so the same
+      // merchants cost nothing next month. Marked 'ai' because these are model
+      // suggestions the user merely did not override — a deliberate correction
+      // carries more weight and is recorded as 'user'.
+      await rememberAll(
+        rows.map((row) => ({ merchant: row.merchant, categoryId: row.categoryId })),
+        'ai'
       );
 
       // Land the user on the month they just imported, not whatever they were on.

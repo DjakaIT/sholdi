@@ -25,6 +25,7 @@ import { useCategories } from '@/features/expenses/hooks';
 import { NEEDS_REVIEW_BELOW } from '@/features/expenses/types';
 import { extractStatement, isAiConfigured } from '@/lib/functions';
 import { newId } from '@/lib/db';
+import { listPatterns, resolveMerchant } from '@/features/transactions/merchantMemory';
 import { useImportStore } from '@/stores/useImportStore';
 import { colors, fonts, spacing } from '@/theme/tokens';
 
@@ -74,15 +75,29 @@ export default function PdfScreen() {
         return;
       }
 
+      // COST-CONTROLS.md §3: a merchant the device already recognises is assigned
+      // locally and costs nothing. The model's suggestion is only used where memory
+      // has nothing to say.
+      const patterns = await listPatterns();
+
       const rows = result.expenses.map((expense) => {
-        const match = (categories ?? []).find(
+        const remembered = resolveMerchant(expense.merchant, patterns);
+
+        const suggested = (categories ?? []).find(
           (c) => c.name.toLowerCase() === expense.suggested_category.toLowerCase()
         );
+        const categoryId = remembered.categoryId ?? suggested?.id ?? null;
+
+        // A remembered merchant is more trustworthy than a fresh guess, so it
+        // raises confidence rather than inheriting the model's.
+        const confidence = remembered.via === 'none' ? expense.confidence : remembered.confidence;
+
         return {
           ...expense,
           id: newId(),
-          needs_review: expense.confidence < NEEDS_REVIEW_BELOW,
-          categoryId: match?.id ?? null,
+          confidence,
+          needs_review: confidence < NEEDS_REVIEW_BELOW,
+          categoryId,
         };
       });
 

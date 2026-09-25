@@ -30,7 +30,7 @@ const DATABASE_NAME = 'sholdi.db';
  * which migrations a given phone has already run — the local equivalent of the
  * migrations folder, and just as strictly ordered.
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 let database: SQLite.SQLiteDatabase | null = null;
 
@@ -129,6 +129,27 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     `);
 
     await seedSystemCategories(db);
+  }
+
+  if (current < 2) {
+    // Merchant memory. COST-CONTROLS.md §3 — the biggest structural saving there
+    // is: after the first statement most merchants repeat, and categorising Konzum
+    // for the fortieth time should cost nothing.
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS merchant_patterns (
+        id           TEXT PRIMARY KEY NOT NULL,
+        pattern      TEXT NOT NULL UNIQUE,
+        category_id  TEXT REFERENCES categories(id) ON DELETE CASCADE,
+        hit_count    INTEGER NOT NULL DEFAULT 1,
+        last_seen_at TEXT NOT NULL,
+        -- A 'user' correction is never overwritten by an 'ai' suggestion (§3).
+        source       TEXT NOT NULL CHECK (source IN ('ai','user')),
+        created_at   TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS merchant_patterns_pattern_idx
+        ON merchant_patterns (pattern);
+    `);
   }
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
