@@ -29,8 +29,9 @@ import {
   expandCompact,
 } from '../_shared/compact.ts';
 import type { CompactStatement } from '../_shared/compact.ts';
-import { HttpError, json, serveJson } from '../_shared/http.ts';
+import { HttpError, categoryNamesFrom, json, serveJson } from '../_shared/http.ts';
 import { fromBase64 } from '../_shared/encoding.ts';
+import { MAX_BODY_CHARS, assertBase64Size, enforceRateLimit, readJsonBody } from '../_shared/guard.ts';
 import { MAX_PDF_BYTES, isEncryptedPdf, isPdf } from '../_shared/pdf.ts';
 import { reconcile, validateExtracted } from '../_shared/validate.ts';
 
@@ -52,14 +53,26 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const body = await req.json().catch(() => null);
-    if (!body || typeof body.pdfBase64 !== 'string' || !body.pdfBase64) {
-      throw new HttpError(400, 'No statement was sent');
-    }
+    // The most expensive call in the app — Sonnet over a multi-page document — so
+    // it carries the tightest limit (COST-CONTROLS.md §9).
+    enforceRateLimit(req, 'statement');
+
+    const body = await readJsonBody(req, MAX_BODY_CHARS.statement);
+    const pdfBase64 = typeof body.pdfBase64 === 'string' ? body.pdfBase64 : '';
+    if (!pdfBase64) throw new HttpError(400, 'No statement was sent');
+
+    // Size is checked on the encoded string, before any of it is expanded. The old
+    // order decoded first and checked second, so an oversized upload was fully
+    // allocated in the worker before it could be refused.
+    assertBase64Size(
+      pdfBase64,
+      MAX_BODY_CHARS.statement,
+      'That statement is too large. Try a single month.'
+    );
 
     // Decoded only so the checks below can run; the API is handed the original
     // base64 string, so nothing is re-encoded.
-    const bytes = fromBase64(body.pdfBase64);
+    const bytes = fromBase64(pdfBase64);
 
     if (bytes.length > MAX_PDF_BYTES) {
       throw new HttpError(413, 'That statement is too large. Try a single month.');
@@ -77,9 +90,7 @@ Deno.serve(
       );
     }
 
-    const categories: string[] = Array.isArray(body.categories)
-      ? body.categories.filter((c: unknown): c is string => typeof c === 'string').slice(0, 50)
-      : [];
+    const categories = categoryNamesFrom(body);
     const period = parsePeriod(body.period);
 
     const codeMap = buildCategoryCodes(categories);
@@ -108,8 +119,19 @@ Deno.serve(
     // Positional arrays back into the §4.2 contract.
     const { expenses, dropped } = expandCompact(compact, codeMap);
 
+    // §4.3 wants every row checked against the statement period, but the app does
+    // not know the period until the statement has been read — so without this the
+    // bounds were always empty and a hallucinated 2019 date passed validation.
+    // The model reports the period it saw; when the caller supplied none, that is
+    // used instead. A row outside the document's own stated period is exactly the
+    // kind of invention §4.3 exists to catch.
+    const effectivePeriod = {
+      start: period.start ?? isoDate(compact?.period_start),
+      end: period.end ?? isoDate(compact?.period_end),
+    };
+
     // Shape is guaranteed by the schema; truth is not (§4.3).
-    const { valid, issues } = validateExtracted(expenses, period);
+    const { valid, issues } = validateExtracted(expenses, effectivePeriod);
 
     const statementTotal = Number(body.statementTotalCents);
     const check = reconcile(valid, Number.isFinite(statementTotal) ? statementTotal : undefined);
@@ -129,7 +151,10 @@ Deno.serve(
 function parsePeriod(value: unknown): { start?: string; end?: string } {
   if (typeof value !== 'object' || value === null) return {};
   const { start, end } = value as { start?: unknown; end?: unknown };
-  const iso = (v: unknown) =>
-    typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined;
-  return { start: iso(start), end: iso(end) };
+  return { start: isoDate(start), end: isoDate(end) };
+}
+
+/** A 'YYYY-MM-DD' string, or undefined for anything else. */
+function isoDate(value: unknown): string | undefined {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : undefined;
 }

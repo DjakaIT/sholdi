@@ -16,6 +16,7 @@ import { extractStructured } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
 import { HttpError, categoryNamesFrom, json, serveJson, todayFrom } from '../_shared/http.ts';
+import { MAX_BODY_CHARS, enforceRateLimit, readJsonBody } from '../_shared/guard.ts';
 import { validateExtracted } from '../_shared/validate.ts';
 
 const MAX_TEXT_LENGTH = 500;
@@ -36,7 +37,9 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const body = await req.json().catch(() => ({}));
+    enforceRateLimit(req, 'text');
+
+    const body = await readJsonBody(req, MAX_BODY_CHARS.small);
 
     const text = typeof body.text === 'string' ? body.text.trim() : '';
     if (!text) throw new HttpError(400, 'Provide some text describing the expense');

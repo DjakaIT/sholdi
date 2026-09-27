@@ -1,0 +1,35 @@
+# Supabase project configuration.
+#
+# This file exists for one reason: to pin `verify_jwt` for every function.
+#
+# There was no config.toml before. The gate was on — it was verified against the
+# deployed endpoints, which return 401 without a key — but only because that is the
+# CLI's default. Nothing in the repo said so, so a single `--no-verify-jwt` deploy,
+# or a fresh clone deployed by someone who did not know, would have opened all five
+# endpoints to the internet with no warning and no diff to notice.
+#
+# Stating it here makes the gate a property of the project rather than a property of
+# whoever last ran the deploy.
+#
+# ── What this project does NOT use ────────────────────────────────────────────
+# No database, no auth, no storage. Every expense lives in SQLite on the phone
+# (see src/lib/db.ts). These functions are stateless processors that hold the
+# Anthropic key and nothing else, so the sections a normal Supabase project needs
+# are deliberately absent.
+
+project_id = "sholdi"
+
+[functions.extract-statement]
+verify_jwt = true
+
+[functions.extract-receipt]
+verify_jwt = true
+
+[functions.extract-text]
+verify_jwt = true
+
+[functions.ask-sholdi]
+verify_jwt = true
+
+[functions.write-insight]
+verify_jwt = true

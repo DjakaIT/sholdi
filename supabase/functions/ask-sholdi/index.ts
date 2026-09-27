@@ -17,6 +17,7 @@
 import { getAnthropic } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { HttpError, json, serveJson } from '../_shared/http.ts';
+import { MAX_BODY_CHARS, enforceRateLimit, readJsonBody } from '../_shared/guard.ts';
 
 const MAX_QUESTION_LENGTH = 500;
 const MAX_SUMMARY_LENGTH = 20_000;
@@ -43,11 +44,24 @@ question needs transaction-level detail you do not have, say so plainly and answ
 what you can from the totals. Never invent a number: every figure you give must come
 from the data below.
 
+The comparisons are already done for you. Each line carries its own change against
+the month before — "(up 8000 from 52000)" — so you never need to subtract anything.
+Read the direction off the line rather than working it out.
+
+Never show your working, never correct yourself mid-sentence, and never write
+"wait", "let me check" or "actually". A reply that visibly changes its mind reads as
+unreliable about the user's own money, which is the one thing this must not be.
+
 Amounts are in cents. Write them as euros, e.g. 38815 is "€388".`;
 
 Deno.serve(
   serveJson(async (req) => {
-    const body = await req.json().catch(() => ({}));
+    // §7 caps chat per user per day, which is enforced on the device where the
+    // user actually is (src/features/usage/quota.ts). This is the coarser server
+    // brake: it does not know who is asking, only how fast the asking is arriving.
+    enforceRateLimit(req, 'chat');
+
+    const body = await readJsonBody(req, MAX_BODY_CHARS.small);
 
     const question = typeof body.question === 'string' ? body.question.trim() : '';
     if (!question) throw new HttpError(400, 'Ask a question');
@@ -62,6 +76,12 @@ Deno.serve(
       model: MODELS.chat,
       max_tokens: MAX_TOKENS.chat,
       system: SYSTEM,
+      // Thinking off, for the same reason extraction has it off: with the deltas
+      // now computed on the device there is no reasoning left to buy, only phrasing.
+      // Sonnet 5 reasons adaptively by default and those tokens come out of the
+      // 800-token cap — which is how a two-sentence answer ended up composing its
+      // arithmetic out loud in the reply.
+      thinking: { type: 'disabled' },
       messages: [
         {
           role: 'user',

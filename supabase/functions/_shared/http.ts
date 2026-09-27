@@ -13,15 +13,28 @@
  * rate-limited per project.
  *
  * It is NOT strong: the anon key ships inside the APK and can be extracted, so a
- * determined person could spend your Anthropic credits. Mitigations worth adding
- * before launch — set a spend cap on the Anthropic key, and rate-limit per IP at
- * the edge. Flagged rather than pretended away.
+ * determined person could spend your Anthropic credits. What now stands behind it:
+ * per-IP rate limits and payload ceilings in `guard.ts`, per-user daily quotas on
+ * the device in `src/features/usage/quota.ts`, and a spend cap on the Anthropic key
+ * — which §9 rightly calls the backstop rather than the plan.
+ *
+ * ── Why CORS is closed ────────────────────────────────────────────────────────
+ * These headers used to allow any origin. Nothing needs that: the only client is a
+ * native app, and React Native's fetch is not subject to CORS at all — it never
+ * sends a preflight and never checks the response header. So the wildcard bought
+ * the app nothing while letting any web page in any browser spend an extracted key
+ * on the user's behalf, from the visitor's own IP.
+ *
+ * Browsers are now refused. `OPTIONS` still answers, because a rejected preflight
+ * should be a clear refusal rather than a hang, but it advertises no origin.
  */
 
-export const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+/**
+ * Sent on every response. No `Access-Control-Allow-Origin`: its absence is what
+ * makes a browser refuse to hand the response to a page's JavaScript.
+ */
+export const corsHeaders: Record<string, string> = {
+  Vary: 'Origin',
 };
 
 export class HttpError extends Error {
@@ -43,7 +56,14 @@ export function json(body: unknown, status = 200): Response {
  */
 export function serveJson(handler: (req: Request) => Promise<Response>) {
   return async (req: Request): Promise<Response> => {
-    if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders });
+    // Answered, but grants nothing: no allowed origin, so a browser stops here.
+    if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: corsHeaders });
+
+    // Everything here takes a body. Refusing other verbs early keeps a stray GET
+    // from reaching a handler that would fail on a missing one.
+    if (req.method !== 'POST') {
+      return json({ error: 'Use POST.' }, 405);
+    }
 
     try {
       return await handler(req);

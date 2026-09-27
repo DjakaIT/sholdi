@@ -13,11 +13,10 @@
 import { extractStructured } from '../_shared/anthropic.ts';
 import { MAX_TOKENS, MODELS } from '../_shared/models.ts';
 import { EXTRACTED_EXPENSE_SCHEMA } from '../_shared/extracted.ts';
-import { HttpError, json, serveJson } from '../_shared/http.ts';
-import { fromBase64, normaliseImageMedia } from '../_shared/encoding.ts';
+import { HttpError, categoryNamesFrom, json, serveJson, todayFrom } from '../_shared/http.ts';
+import { normaliseImageMedia } from '../_shared/encoding.ts';
+import { MAX_BODY_CHARS, assertBase64Size, enforceRateLimit, readJsonBody } from '../_shared/guard.ts';
 import { validateExtracted } from '../_shared/validate.ts';
-
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
 const SYSTEM = `You read a photo and return the single purchase it shows.
 
@@ -36,30 +35,36 @@ Rules:
 
 Deno.serve(
   serveJson(async (req) => {
-    const body = await req.json().catch(() => null);
-    if (!body || typeof body.imageBase64 !== 'string' || !body.imageBase64) {
-      throw new HttpError(400, 'No photo was sent');
-    }
+    enforceRateLimit(req, 'receipt');
 
-    const mediaType = normaliseImageMedia(body.mimeType);
+    const body = await readJsonBody(req, MAX_BODY_CHARS.receipt);
+    const imageBase64 = typeof body.imageBase64 === 'string' ? body.imageBase64 : '';
+    if (!imageBase64) throw new HttpError(400, 'No photo was sent');
+
+    const mediaType = normaliseImageMedia(
+      typeof body.mimeType === 'string' ? body.mimeType : undefined
+    );
     if (!mediaType) {
       // HEIC lands here: the iPhone default, which the API cannot read. The app
       // converts to JPEG before sending (see _shared/encoding.ts).
       throw new HttpError(415, "That photo format isn't supported. Try a JPEG or PNG.");
     }
 
-    // Decoded only to check the size; the API gets the original base64 string.
-    if (fromBase64(body.imageBase64).length > MAX_IMAGE_BYTES) {
-      throw new HttpError(413, 'That photo is too large. Try again at a smaller size.');
-    }
+    // Measured on the encoded string. The old check decoded the whole payload into
+    // memory first, so an oversized photo was fully allocated before being refused.
+    assertBase64Size(
+      imageBase64,
+      MAX_BODY_CHARS.receipt,
+      'That photo is too large. Try again at a smaller size.'
+    );
 
-    const categories = Array.isArray(body.categories)
-      ? body.categories.filter((c: unknown): c is string => typeof c === 'string').slice(0, 50)
-      : [];
-    const today =
-      typeof body.today === 'string' && /^d{4}-d{2}-d{2}$/.test(body.today)
-        ? body.today
-        : new Date().toISOString().slice(0, 10);
+    const categories = categoryNamesFrom(body);
+    // Shared with the other handlers rather than re-implemented. The local copy had
+    // `/^d{4}-d{2}-d{2}$/` — no backslashes — so it matched the literal text "dddd-dd-dd"
+    // and nothing else. Every device date failed it and the server's UTC date was
+    // used instead, which in UTC+2 dates an undated receipt scanned before 02:00 to
+    // the previous day, and on the 1st to the previous month (§7).
+    const today = todayFrom(body);
 
     const extracted = await extractStructured<Record<string, unknown>>({
       system: SYSTEM,
