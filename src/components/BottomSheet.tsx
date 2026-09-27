@@ -9,7 +9,7 @@
  * sheet springs open and the backdrop fades; nothing else moves.
  */
 import { useEffect } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, Pressable, StyleSheet, View } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useReducedMotion,
@@ -59,7 +59,11 @@ export function BottomSheet({ children, onDismiss }: BottomSheetProps) {
   }));
 
   return (
-    <View style={styles.root}>
+    // Keyboard-aware on BOTH platforms. Android 15+ draws edge to edge, so the
+    // window no longer shrinks for the keyboard by itself: without this, the Type it
+    // field and the New category field sat underneath it, and a tap aimed at "Add"
+    // landed on a key instead.
+    <KeyboardAvoidingView behavior="padding" style={styles.root}>
       <Animated.View style={[styles.scrim, scrimStyle]}>
         <Pressable
           accessibilityRole="button"
@@ -74,7 +78,7 @@ export function BottomSheet({ children, onDismiss }: BottomSheetProps) {
         <View style={styles.grabber} />
         {children}
       </Animated.View>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

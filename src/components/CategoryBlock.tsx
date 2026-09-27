@@ -8,11 +8,12 @@
  * Top row: category name + small icon. Bottom row: amount + delta, the delta in the
  * category's own accent. The largest block also carries its share of the month.
  */
+import { createElement } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
 import { formatMoneyWhole } from '@/lib/money';
 import { categoryColors } from '@/theme/categoryColors';
-import type { CategoryColorToken } from '@/theme/categoryColors';
+import type { DisplayColorToken } from '@/theme/categoryColors';
 import { categoryIcon } from '@/theme/categoryIcons';
 import { fonts, radii, tabular } from '@/theme/tokens';
 
@@ -21,11 +22,15 @@ const ICON_STROKE = 1.6;
 
 export type CategoryBlockProps = {
   name: string;
-  colorToken: CategoryColorToken;
+  colorToken: DisplayColorToken;
   cents: number;
   currency?: string;
-  /** Whole percent change on the previous month. Negative means spending fell. */
-  deltaPercent: number;
+  /**
+   * Whole percent change on the previous month. Negative means spending fell.
+   * Null when there is no previous month to compare with — which used to render as
+   * "↑ 0%", a claim about a month that has no data.
+   */
+  deltaPercent: number | null;
   /** Type size for the name, already clamped to 13–19 by the caller (§6.7). */
   nameSize: number;
   height: number;
@@ -44,10 +49,17 @@ export function CategoryBlock({
   shareLabel,
 }: CategoryBlockProps) {
   const palette = categoryColors(colorToken);
-  const Icon = categoryIcon(name);
+  // Looked up from a module-level map, then rendered with createElement: assigning
+  // it to a capitalised local and using it as JSX reads to the linter as a
+  // component defined during render.
+  const icon = categoryIcon(name);
 
-  const arrow = deltaPercent < 0 ? '↓' : '↑';
-  const delta = `${arrow} ${Math.abs(deltaPercent)}%`;
+  const delta =
+    deltaPercent === null
+      ? null
+      : deltaPercent === 0
+        ? 'same'
+        : `${deltaPercent < 0 ? '↓' : '↑'} ${Math.abs(deltaPercent)}%`;
 
   return (
     <View style={[styles.block, { backgroundColor: palette.block, height }]}>
@@ -55,7 +67,7 @@ export function CategoryBlock({
         <Text style={[styles.name, { color: palette.title, fontSize: nameSize }]} numberOfLines={1}>
           {name}
         </Text>
-        {Icon && <Icon size={ICON_SIZE} strokeWidth={ICON_STROKE} color={palette.title} />}
+        {icon && createElement(icon, { size: ICON_SIZE, strokeWidth: ICON_STROKE, color: palette.title })}
       </View>
 
       <View style={styles.bottom}>
@@ -65,7 +77,7 @@ export function CategoryBlock({
             {formatMoneyWhole(cents, currency)}
           </Text>
           {/* Delta in the category's own colour (§6.7). */}
-          <Text style={[styles.delta, { color: palette.accent }]}>{delta}</Text>
+          {delta && <Text style={[styles.delta, { color: palette.accent }]}>{delta}</Text>}
         </View>
       </View>
     </View>

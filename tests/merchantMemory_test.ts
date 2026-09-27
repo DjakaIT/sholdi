@@ -139,3 +139,30 @@ Deno.test('an empty memory resolves nothing', () => {
   // Month one: every merchant is unknown and every row goes to the model.
   assertEquals(resolveMerchant('KONZUM', []).via, 'none');
 });
+
+// ── sameMerchantAs ───────────────────────────────────────────────────────────
+
+import { sameMerchantAs } from '../src/features/transactions/resolveMerchant.ts';
+
+Deno.test('the same shop matches across descriptor noise', () => {
+  const isMuller = sameMerchantAs('Muller');
+  assertEquals(isMuller('MULLER 4983 ZAGREB 2'), true);
+  assertEquals(isMuller('muller'), true);
+});
+
+Deno.test('a different shop does not match', () => {
+  assertEquals(sameMerchantAs('Muller')('Konzum'), false);
+  assertEquals(sameMerchantAs('Muller')(null), false);
+});
+
+Deno.test('a nameless descriptor matches nothing', () => {
+  // Sorting "4471 2211" must not sweep every other number-only row along with it.
+  const nothing = sameMerchantAs('4471 2211');
+  assertEquals(nothing('4471 2211'), false);
+  assertEquals(sameMerchantAs(null)('Konzum'), false);
+});
+
+Deno.test('A1 bills are recognised as one merchant', () => {
+  // Sorting one A1 bill on a statement must sort the others with it.
+  assertEquals(sameMerchantAs('A1 Hrvatska')('A1 HRVATSKA D.O.O.'), true);
+});

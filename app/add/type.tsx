@@ -11,7 +11,7 @@
  * it reads merchant and date far better than a regex can.
  */
 import { useState } from 'react';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import { ActivityIndicator, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { BottomSheet } from '@/components/BottomSheet';
@@ -19,12 +19,14 @@ import { Button } from '@/components/Button';
 import { useAddExpense, useCategories } from '@/features/expenses/hooks';
 import { parseNote } from '@/features/expenses/parseText';
 import { NEEDS_REVIEW_BELOW } from '@/features/expenses/types';
-import { extractText } from '@/lib/functions';
-import { isAiConfigured } from '@/lib/functions';
+import { todayLocal } from '@/lib/dates';
+import { extractText, isAiConfigured } from '@/lib/functions';
+import { useCloseAddFlow } from '@/lib/useCloseAddFlow';
 import { colors, fonts, radii, spacing } from '@/theme/tokens';
 
 export default function TypeItScreen() {
-  const router = useRouter();
+  const { mode } = useLocalSearchParams<{ mode?: string }>();
+  const voice = mode === 'voice';
   const [note, setNote] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -32,7 +34,8 @@ export default function TypeItScreen() {
   const { data: categories } = useCategories();
   const addExpense = useAddExpense();
 
-  const dismiss = () => router.back();
+  // Closes the whole sheet flow, not just this sheet (see useCloseAddFlow).
+  const dismiss = useCloseAddFlow();
 
   async function submit() {
     const text = note.trim();
@@ -42,7 +45,8 @@ export default function TypeItScreen() {
     setError(null);
 
     try {
-      const today = new Date().toISOString().slice(0, 10);
+      // The device's calendar, not UTC: see todayLocal().
+      const today = todayLocal();
       const names = (categories ?? []).map((c) => c.name);
 
       // Local read first: it always works and costs nothing.
@@ -101,8 +105,12 @@ export default function TypeItScreen() {
 
   return (
     <BottomSheet onDismiss={dismiss}>
-      <Text style={styles.title}>Type it</Text>
-      <Text style={styles.subtitle}>Plain words work.</Text>
+      <Text style={styles.title}>{voice ? 'Say it' : 'Type it'}</Text>
+      <Text style={styles.subtitle}>
+        {voice
+          ? 'Tap the mic on your keyboard and say it the way you would tell a friend.'
+          : 'Plain words work.'}
+      </Text>
 
       <View style={styles.field}>
         <TextInput

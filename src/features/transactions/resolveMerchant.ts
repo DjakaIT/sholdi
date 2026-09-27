@@ -70,3 +70,17 @@ export function resolveMerchant(raw: string | null, patterns: MerchantPattern[])
 
   return NO_MATCH;
 }
+
+/**
+ * A predicate for "the same shop as this one", by normalised key.
+ *
+ * Used when one decision should apply to every unsorted purchase from a merchant.
+ * A descriptor with no usable name matches nothing, so "4471 2211" never drags
+ * unrelated rows along with it.
+ */
+export function sameMerchantAs(raw: string | null): (other: string | null) => boolean {
+  if (!raw) return () => false;
+  const key = normaliseMerchant(raw);
+  if (!isUsableMerchantKey(key)) return () => false;
+  return (other) => Boolean(other) && normaliseMerchant(other as string) === key;
+}

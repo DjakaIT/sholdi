@@ -8,7 +8,7 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { Amount } from '@/components/Amount';
 import { categoryAccent } from '@/theme/categoryColors';
-import type { CategoryColorToken } from '@/theme/categoryColors';
+import type { DisplayColorToken } from '@/theme/categoryColors';
 import { colors, radii, type as typeScale } from '@/theme/tokens';
 
 /** §6.4 sizes the category dot at 5px; Home reuses it so the mark reads the same. */
@@ -16,7 +16,7 @@ const DOT = 5;
 
 export type CategoryRowProps = {
   name: string;
-  colorToken: CategoryColorToken;
+  colorToken: DisplayColorToken;
   /** Integer cents. */
   cents: number;
   currency?: string;

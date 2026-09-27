@@ -86,3 +86,24 @@ Deno.test('two genuinely different merchants stay different', () => {
     false
   );
 });
+
+// ── short leading brands ─────────────────────────────────────────────────────
+
+Deno.test('real data: a leading short brand with a digit survives', () => {
+  // "A1 Hrvatska" came out as "" — A1 stripped for its digit, HRVATSKA as a place —
+  // so the merchant could never be remembered at all.
+  assertEquals(normaliseMerchant('A1 Hrvatska'), 'A1');
+  assertEquals(normaliseMerchant('A1 HRVATSKA D.O.O.'), 'A1');
+  assertEquals(normaliseMerchant('O2 UK'), 'O2 UK');
+});
+
+Deno.test('the brand exception only applies to the first token', () => {
+  // A digit-bearing token anywhere else is still an id.
+  assertEquals(normaliseMerchant('KONZUM A1'), 'KONZUM');
+});
+
+Deno.test('long or digit-first leading tokens are still ids', () => {
+  assertEquals(normaliseMerchant('4471 KONZUM'), 'KONZUM');
+  assertEquals(normaliseMerchant('P45CD86032 SPOTIFY'), 'SPOTIFY');
+  assertEquals(normaliseMerchant('1A KONZUM'), 'KONZUM');
+});

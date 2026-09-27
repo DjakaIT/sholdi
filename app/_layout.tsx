@@ -4,7 +4,7 @@
  * The auth gate ARCHITECTURE.md §2 calls for arrives with the Supabase project;
  * there is nothing to gate until then.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   SpaceGrotesk_400Regular,
   SpaceGrotesk_500Medium,
@@ -95,6 +95,12 @@ export default function RootLayout() {
             */}
             <Stack.Screen
               name="import/[importId]"
+              // No swipe-back: leaving a half-reviewed statement is a decision, made
+              // with Discard (or confirmed on Android's back button), never a gesture.
+              options={{ contentStyle: { backgroundColor: colors.page }, gestureEnabled: false }}
+            />
+            <Stack.Screen
+              name="category/[categoryId]"
               options={{ contentStyle: { backgroundColor: colors.page } }}
             />
           </Stack>

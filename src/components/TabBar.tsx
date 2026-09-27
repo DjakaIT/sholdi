@@ -37,12 +37,12 @@ import { colors, nav } from '@/theme/tokens';
 
 const SLIDE_MS = 180;
 
-type BarContext = {
+type BarContextValue = {
   /** An item tells the bar it holds the focus, so the overline can slide to it. */
   reportFocus: (index: number) => void;
 };
 
-const BarContext = createContext<BarContext | null>(null);
+const BarContext = createContext<BarContextValue | null>(null);
 const CellIndexContext = createContext(-1);
 
 export type TabBarProps = {
@@ -102,7 +102,7 @@ export function TabBar({ children, style }: TabBarProps) {
       />
       <BarContext.Provider value={context}>
         {cells.map((cell, index) => (
-          // eslint-disable-next-line react/no-array-index-key -- the bar is a fixed list
+          // The bar is a fixed list of five, so the index is a stable key.
           <View key={index} style={styles.cell} onLayout={onCellLayout(index)}>
             <CellIndexContext.Provider value={index}>{cell}</CellIndexContext.Provider>
           </View>

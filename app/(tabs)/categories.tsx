@@ -7,17 +7,37 @@
  *
  * The screen always ends in Sholdi's voice — that closing line is what stops it
  * being a table.
+ *
+ * This screen used to render a mock month — five invented categories and a goal
+ * called "Trip to Vis" — whatever the user had actually spent. It now reads the
+ * same local month as Home, so the two can never disagree. Categories beyond the
+ * five blocks are listed underneath rather than hidden, the goal strip appears only
+ * when a goal exists, and every block opens its purchases for re-sorting.
  */
+import { useState } from 'react';
 import { Plus } from 'lucide-react-native';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useRouter } from 'expo-router';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import { Button } from '@/components/Button';
 import { Caron } from '@/components/Caron';
 import { CategoryBlock } from '@/components/CategoryBlock';
+import { CategoryRow } from '@/components/CategoryRow';
+import { EmptyState } from '@/components/EmptyState';
 import { GoalStrip } from '@/components/GoalStrip';
-import { MOCK_GOAL, MOCK_MONTH_SUMMARY } from '@/features/expenses/mockData';
-import { monthName } from '@/lib/dates';
+import { InsightRow } from '@/components/InsightRow';
+import { NewCategorySheet } from '@/components/NewCategorySheet';
+import {
+  type CategoryTotal,
+  useGoals,
+  useHasAnyExpenses,
+  useMonthSummary,
+} from '@/features/expenses/hooks';
+import { observeMonth } from '@/features/insights/observation';
+import { currentMonthLocal, monthName, previousMonth } from '@/lib/dates';
 import { percentChange } from '@/lib/money';
+import { useMonthStore } from '@/stores/useMonthStore';
 import { colors, fonts, indexTypeSize, spacing, type as typeScale } from '@/theme/tokens';
 
 /** §6.7 fixes the row heights; they are the clamp that stops an outlier dominating. */
@@ -26,105 +46,167 @@ const ROW_HEIGHTS = { first: 92, second: 76, third: 68 };
 const ADD_BUTTON = 30;
 
 export default function IndexScreen() {
-  const summary = MOCK_MONTH_SUMMARY;
-  const total = summary.totalCents;
+  const router = useRouter();
+  const month = useMonthStore((state) => state.month);
+  const { data: summary, isPending } = useMonthSummary(month);
+  const { data: goals } = useGoals();
+  const { data: hasAny } = useHasAnyExpenses();
+  const [adding, setAdding] = useState(false);
 
-  const ranked = [...summary.categories].sort((a, b) => b.cents - a.cents);
+  const total = summary?.totalCents ?? 0;
+  const ranked = [...(summary?.categories ?? [])].sort((a, b) => b.cents - a.cents);
   const [largest, ...rest] = ranked;
   const secondRow = rest.slice(0, 2);
   const thirdRow = rest.slice(2, 4);
+  const beyond = rest.slice(4);
 
   // §3 puts the largest category's name at 19 and the smallest at 13. Sizing off the
   // raw share would never reach 19, so position within the visible set is what is
   // normalised, then clamped by indexTypeSize.
   const max = ranked[0]?.cents ?? 0;
-  const min = ranked[ranked.length - 1]?.cents ?? 0;
+  const min = ranked[Math.min(ranked.length, 5) - 1]?.cents ?? 0;
   const nameSize = (cents: number) =>
     indexTypeSize(max === min ? 1 : (cents - min) / (max - min));
 
-  const delta = (cents: number, previous: number) => percentChange(cents, previous) ?? 0;
-  const share = (cents: number) => Math.round((cents / total) * 100);
+  // No previous month for this category means no comparison — not "↑ 0%".
+  const delta = (category: CategoryTotal) =>
+    category.previousCents > 0 ? percentChange(category.cents, category.previousCents) : null;
+  const share = (cents: number) => (total > 0 ? Math.round((cents / total) * 100) : 0);
+
+  const open = (category: CategoryTotal) =>
+    router.push({
+        pathname: '/category/[categoryId]',
+        params: { categoryId: category.categoryId ?? 'none' },
+      });
+
+  const closing = summary
+    ? observeMonth({
+        month,
+        previousMonth: previousMonth(month),
+        inProgress: month === currentMonthLocal(),
+        totalCents: summary.totalCents,
+        previousTotalCents: summary.previousTotalCents,
+        categories: summary.categories.map((c) => ({
+          name: c.name,
+          cents: c.cents,
+          previousCents: c.previousCents,
+          uncategorised: c.categoryId === null,
+        })),
+      })
+    : null;
+
+  const block = (category: CategoryTotal, height: number, withShare = false) => (
+    <Pressable
+      key={category.categoryId ?? 'none'}
+      accessibilityRole="button"
+      accessibilityLabel={`${category.name}, open its purchases`}
+      onPress={() => open(category)}
+      style={({ pressed }) => [{ flex: withShare ? 1 : category.cents }, pressed && styles.pressed]}>
+      <CategoryBlock
+        name={category.name}
+        colorToken={category.colorToken}
+        cents={category.cents}
+        currency={summary?.currency}
+        deltaPercent={category.categoryId === null ? null : delta(category)}
+        nameSize={nameSize(category.cents)}
+        height={height}
+        shareLabel={withShare ? `${share(category.cents)}% of month` : undefined}
+      />
+    </Pressable>
+  );
 
   return (
     <SafeAreaView edges={['top']} style={styles.screen}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Text style={styles.eyebrow}>Index · {monthName(summary.month)}</Text>
+          <Text style={styles.eyebrow}>Index · {monthName(month)}</Text>
           <Pressable
             accessibilityRole="button"
             accessibilityLabel="Add category"
-            style={styles.addButton}>
+            hitSlop={8}
+            onPress={() => setAdding(true)}
+            style={({ pressed }) => [styles.addButton, pressed && styles.pressed]}>
             <Plus size={15} strokeWidth={1.6} color={colors.ink} />
           </Pressable>
         </View>
 
-        <View style={styles.mosaic}>
-          {largest && (
-            <View style={styles.row}>
-              <CategoryBlock
-                name={largest.name}
-                colorToken={largest.colorToken}
-                cents={largest.cents}
-                currency={summary.currency}
-                deltaPercent={delta(largest.cents, largest.previousCents)}
-                nameSize={nameSize(largest.cents)}
-                height={ROW_HEIGHTS.first}
-                shareLabel={`${share(largest.cents)}% of month`}
-              />
-            </View>
-          )}
-
-          {secondRow.length > 0 && (
-            <View style={styles.row}>
-              {secondRow.map((category) => (
-                <View key={category.name} style={{ flex: category.cents }}>
-                  <CategoryBlock
-                    name={category.name}
-                    colorToken={category.colorToken}
-                    cents={category.cents}
-                    currency={summary.currency}
-                    deltaPercent={delta(category.cents, category.previousCents)}
-                    nameSize={nameSize(category.cents)}
-                    height={ROW_HEIGHTS.second}
-                  />
-                </View>
-              ))}
-            </View>
-          )}
-
-          {thirdRow.length > 0 && (
-            <View style={styles.row}>
-              {thirdRow.map((category) => (
-                <View key={category.name} style={{ flex: category.cents }}>
-                  <CategoryBlock
-                    name={category.name}
-                    colorToken={category.colorToken}
-                    cents={category.cents}
-                    currency={summary.currency}
-                    deltaPercent={delta(category.cents, category.previousCents)}
-                    nameSize={nameSize(category.cents)}
-                    height={ROW_HEIGHTS.third}
-                  />
-                </View>
-              ))}
-            </View>
-          )}
-
-          <GoalStrip
-            name={MOCK_GOAL.name}
-            savedCents={MOCK_GOAL.savedCents}
-            targetCents={MOCK_GOAL.targetCents}
-            currency={summary.currency}
-          />
-        </View>
-
-        <View style={styles.closing}>
-          <View style={styles.caron}>
-            <Caron width={12} color={colors.ink3} />
+        {isPending ? (
+          <View style={styles.loading}>
+            <ActivityIndicator color={colors.faint} />
           </View>
-          <Text style={styles.closingText}>{summary.indexClosingLine}</Text>
-        </View>
+        ) : hasAny === false ? (
+          <View style={styles.emptyWrap}>
+            <EmptyState
+              illustration="mosaic"
+              line="Your categories land here, each block sized by what you spend on it.">
+              <Button
+                label="Import a bank statement"
+                variant="primary"
+                onPress={() => router.push('/add/pdf')}
+              />
+              <Button label="Add spending" variant="secondary" onPress={() => router.push('/add')} />
+            </EmptyState>
+          </View>
+        ) : ranked.length === 0 ? (
+          <View style={styles.quiet}>
+            <InsightRow text={`Nothing recorded in ${monthName(month)} yet.`} />
+          </View>
+        ) : (
+          <>
+            <View style={styles.mosaic}>
+              {largest && <View style={styles.row}>{block(largest, ROW_HEIGHTS.first, true)}</View>}
+              {secondRow.length > 0 && (
+                <View style={styles.row}>{secondRow.map((c) => block(c, ROW_HEIGHTS.second))}</View>
+              )}
+              {thirdRow.length > 0 && (
+                <View style={styles.row}>{thirdRow.map((c) => block(c, ROW_HEIGHTS.third))}</View>
+              )}
+
+              {/* §6.7: the goal strip closes the mosaic — when there is a goal. */}
+              {(goals ?? []).slice(0, 1).map((goal) => (
+                <GoalStrip
+                  key={goal.id}
+                  name={goal.name}
+                  savedCents={goal.savedCents}
+                  targetCents={goal.targetCents}
+                  currency={summary?.currency}
+                />
+              ))}
+            </View>
+
+            {beyond.length > 0 && (
+              <View style={styles.beyond}>
+                {beyond.map((category) => (
+                  <Pressable
+                    key={category.categoryId ?? 'none'}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${category.name}, open its purchases`}
+                    onPress={() => open(category)}
+                    style={({ pressed }) => pressed && styles.pressed}>
+                    <CategoryRow
+                      name={category.name}
+                      colorToken={category.colorToken}
+                      cents={category.cents}
+                      currency={summary?.currency}
+                    />
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
+            {closing && (
+              <View style={styles.closing}>
+                <View style={styles.caron}>
+                  <Caron width={12} color={colors.ink3} />
+                </View>
+                <Text style={styles.closingText}>{closing}</Text>
+              </View>
+            )}
+          </>
+        )}
       </ScrollView>
+
+      <NewCategorySheet visible={adding} onClose={() => setAdding(false)} />
     </SafeAreaView>
   );
 }
@@ -156,6 +238,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  pressed: {
+    opacity: 0.82,
+  },
+  loading: {
+    paddingTop: spacing.xl,
+  },
+  emptyWrap: {
+    marginTop: spacing.xl,
+  },
+  quiet: {
+    marginTop: spacing.lg,
+  },
   mosaic: {
     marginTop: spacing.lg,
     gap: 6,
@@ -163,6 +257,10 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: 'row',
     gap: 6,
+  },
+  beyond: {
+    marginTop: spacing.sm,
+    gap: spacing.sm,
   },
   closing: {
     flexDirection: 'row',

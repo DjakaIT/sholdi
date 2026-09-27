@@ -64,8 +64,15 @@ export function normaliseMerchant(raw: string): string {
 
   if (!cleaned) return '';
 
-  const tokens = cleaned.split(' ').filter((token) => {
+  const tokens = cleaned.split(' ').filter((token, index) => {
     if (!token) return false;
+    // One narrow exception, found on a real statement: a short brand that LEADS
+    // the descriptor and is letters-then-digits — A1 (Croatia's largest telecom),
+    // O2, T2. The blanket rule deleted "A1", then "HRVATSKA" went as a place name,
+    // and the key came out empty: the merchant could never be remembered, and
+    // sorting one A1 bill could not sort the others. Terminal ids ("4983") and
+    // references ("P45CD86032") are nothing like this shape and still go.
+    if (index === 0 && /^\p{L}{1,2}\p{N}{1,2}$/u.test(token)) return true;
     // The rule from §7: any token carrying a digit is an id, a branch or a
     // reference, never a name.
     if (/\p{N}/u.test(token)) return false;

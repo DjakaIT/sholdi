@@ -8,11 +8,13 @@
  * opens a picker inline, never a new screen." `onPressCategory` is that hook — the
  * label is its own touch target, separate from the row.
  */
+import { ChevronDown } from 'lucide-react-native';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { Amount } from '@/components/Amount';
+import { shortDate } from '@/lib/dates';
 import { categoryAccent } from '@/theme/categoryColors';
-import type { CategoryColorToken } from '@/theme/categoryColors';
+import type { DisplayColorToken } from '@/theme/categoryColors';
 import { colors, fonts, type as typeScale } from '@/theme/tokens';
 
 /** §6.4: "prefixed by a 5px dot". */
@@ -21,7 +23,7 @@ const DOT = 5;
 export type ExtractedRowProps = {
   merchant: string;
   category: string;
-  colorToken: CategoryColorToken;
+  colorToken: DisplayColorToken;
   cents: number;
   currency?: string;
   /** 'YYYY-MM-DD'. */
@@ -50,9 +52,13 @@ export function ExtractedRow({
           accessibilityRole="button"
           accessibilityLabel={`Category: ${category}. Tap to change.`}
           onPress={onPressCategory}
+          disabled={!onPressCategory}
+          hitSlop={{ top: 8, bottom: 8, left: 4, right: 24 }}
           style={styles.categoryRow}>
           <View style={[styles.dot, { backgroundColor: accent }]} />
           <Text style={[styles.category, { color: accent }]}>{category}</Text>
+          {/* Says "this opens" without a word of copy. */}
+          {onPressCategory && <ChevronDown size={11} strokeWidth={1.6} color={accent} />}
         </Pressable>
       </View>
 
@@ -64,13 +70,6 @@ export function ExtractedRow({
   );
 }
 
-/** '2026-08-29' -> '29 Aug'. Local formatting only; the value stays a date string. */
-function shortDate(occurredOn: string): string {
-  const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-  const day = Number(occurredOn.slice(8, 10));
-  const month = MONTHS[Number(occurredOn.slice(5, 7)) - 1] ?? '';
-  return `${day} ${month}`;
-}
 
 const styles = StyleSheet.create({
   row: {

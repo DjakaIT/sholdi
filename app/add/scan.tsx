@@ -11,7 +11,7 @@
  * it says so plainly rather than failing at the moment of upload.
  */
 import { useState } from 'react';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 
@@ -20,11 +20,12 @@ import { Button } from '@/components/Button';
 import { useAddExpense, useCategories } from '@/features/expenses/hooks';
 import { NEEDS_REVIEW_BELOW } from '@/features/expenses/types';
 import { prepareImageForModel } from '@/features/transactions/prepareImage';
+import { todayLocal } from '@/lib/dates';
 import { extractReceipt, isAiConfigured } from '@/lib/functions';
+import { useCloseAddFlow } from '@/lib/useCloseAddFlow';
 import { colors, fonts, spacing } from '@/theme/tokens';
 
 export default function ScanScreen() {
-  const router = useRouter();
   const { mode } = useLocalSearchParams<{ mode?: string }>();
   const fromLibrary = mode === 'photo';
 
@@ -35,7 +36,8 @@ export default function ScanScreen() {
   const { data: categories } = useCategories();
   const addExpense = useAddExpense();
 
-  const dismiss = () => router.back();
+  // Closes the whole sheet flow, not just this sheet (see useCloseAddFlow).
+  const dismiss = useCloseAddFlow();
 
   async function pickAndRead(useCamera: boolean) {
     setError(null);
@@ -79,7 +81,9 @@ export default function ScanScreen() {
       const prepared = await prepareImageForModel(asset.uri, asset.width, asset.height);
 
       setStatus('Reading it');
-      const today = new Date().toISOString().slice(0, 10);
+      // The device's calendar, not UTC: an undated receipt scanned after midnight
+      // belongs to today, not to yesterday in London.
+      const today = todayLocal();
       const names = (categories ?? []).map((c) => c.name);
 
       const extracted = await extractReceipt({

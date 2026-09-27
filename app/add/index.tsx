@@ -29,7 +29,19 @@ export default function AddScreen() {
             subLabel="a receipt"
             onPress={() => router.push('/add/scan')}
           />
-          <InputTile icon={Mic} title="Say it" subLabel={'“38 euro, Konzum”'} />
+          {/*
+            Speech-to-text is not built yet (the free, on-device option is noted for
+            later). Until then the tile opens the note field with the keyboard up:
+            every phone keyboard has a dictation mic, and the words land in the
+            same parser. Nothing leaves the app that the keyboard did not already
+            handle. A dead tile was worse than this.
+          */}
+          <InputTile
+            icon={Mic}
+            title="Say it"
+            subLabel={'“38 euro, Konzum”'}
+            onPress={() => router.push({ pathname: '/add/type', params: { mode: 'voice' } })}
+          />
         </View>
         <View style={styles.row}>
           <InputTile

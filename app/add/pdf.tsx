@@ -27,6 +27,7 @@ import { extractStatement, isAiConfigured } from '@/lib/functions';
 import { newId } from '@/lib/db';
 import { listPatterns, resolveMerchant } from '@/features/transactions/merchantMemory';
 import { useImportStore } from '@/stores/useImportStore';
+import { useCloseAddFlow } from '@/lib/useCloseAddFlow';
 import { colors, fonts, spacing } from '@/theme/tokens';
 
 export default function PdfScreen() {
@@ -38,7 +39,8 @@ export default function PdfScreen() {
   const { data: categories } = useCategories();
   const setExtraction = useImportStore((state) => state.setExtraction);
 
-  const dismiss = () => router.back();
+  // Closes the whole sheet flow, not just this sheet (see useCloseAddFlow).
+  const dismiss = useCloseAddFlow();
 
   async function pickAndExtract() {
     setError(null);

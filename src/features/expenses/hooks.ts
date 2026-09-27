@@ -7,19 +7,29 @@
  */
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 
-import { previousMonth } from '@/lib/dates';
+import { currentMonthLocal, previousMonth, todayLocal } from '@/lib/dates';
 import { queryKeys } from '@/lib/queryClient';
-import type { CategoryColorToken } from '@/theme/categoryColors';
+import type { DisplayColorToken } from '@/theme/categoryColors';
 import {
+  createCategory,
+  dismissInsight,
+  getMonthFacts,
   getMonthTotal,
   getMonthTotals,
   getTrailingTotals,
+  hasAnyExpenses,
   insertExpense,
   listCategories,
   listExpenses,
+  listExpensesInCategory,
+  listGoals,
+  listInsights,
+  setCategoryForMerchant,
   updateExpenseCategory,
 } from './repository';
 import type { NewExpense } from './repository';
+import { rememberMerchant } from '@/features/transactions/merchantMemory';
+import { sameMerchantAs } from '@/features/transactions/resolveMerchant';
 
 /** How many months the sparkline shows. */
 const SPARKLINE_MONTHS = 12;
@@ -27,9 +37,10 @@ const SPARKLINE_MONTHS = 12;
 export type CategoryTotal = {
   categoryId: string | null;
   name: string;
-  colorToken: CategoryColorToken;
+  colorToken: DisplayColorToken;
   cents: number;
   previousCents: number;
+  expenseCount: number;
 };
 
 export type MonthSummary = {
@@ -70,11 +81,16 @@ export function useMonthSummary(month: string) {
     queryFn: async (): Promise<MonthSummary> => {
       const prior = previousMonth(month);
 
+      // A month in progress is compared with the same stretch of the month before,
+      // not with all of it — otherwise the 3rd of the month reads as a collapse.
+      const throughDay =
+        month === currentMonthLocal() ? Number(todayLocal().slice(8, 10)) : undefined;
+
       const [totals, priorTotals, total, priorTotal, trailing] = await Promise.all([
         getMonthTotals(month),
-        getMonthTotals(prior),
+        getMonthTotals(prior, throughDay),
         getMonthTotal(month),
-        getMonthTotal(prior),
+        getMonthTotal(prior, throughDay),
         getTrailingTotals(month, SPARKLINE_MONTHS),
       ]);
 
@@ -93,6 +109,7 @@ export function useMonthSummary(month: string) {
           colorToken: t.colorToken,
           cents: t.cents,
           previousCents: priorByCategory.get(t.name) ?? 0,
+          expenseCount: t.expenseCount,
         })),
         isEmpty: total === 0 && totals.length === 0,
       };
@@ -112,12 +129,11 @@ export function useAddExpense() {
 
   return useMutation({
     mutationFn: (expense: NewExpense) => insertExpense(expense),
+    // Everything: every read is local SQLite and cheap, and a single expense moves
+    // Home, Stats, the Index and the first-run empty states all at once. A narrower
+    // list is exactly how a new screen ends up showing stale figures.
     onSuccess: () => {
-      void client.invalidateQueries({ queryKey: ['month-summary'] });
-      void client.invalidateQueries({ queryKey: ['month-totals'] });
-      void client.invalidateQueries({ queryKey: ['month-total'] });
-      void client.invalidateQueries({ queryKey: ['trailing-totals'] });
-      void client.invalidateQueries({ queryKey: ['expenses'] });
+      void client.invalidateQueries();
     },
   });
 }
@@ -160,5 +176,91 @@ export function useSetExpenseCategory(month: string) {
       void client.invalidateQueries({ queryKey: ['month-summary'] });
       void client.invalidateQueries({ queryKey: queryKeys.expenses(month) });
     },
+  });
+}
+
+/** Has anything ever been recorded? Decides between a first-run and a quiet month. */
+export function useHasAnyExpenses() {
+  return useQuery({ queryKey: ['has-any-expenses'], queryFn: hasAnyExpenses });
+}
+
+/** Totals for the `count` months ending at `month`, oldest first. */
+export function useMonthHistory(month: string, count: number) {
+  return useQuery({
+    queryKey: ['month-history', month, count],
+    queryFn: async () => {
+      const totals = await getTrailingTotals(month, count);
+      const months: string[] = [];
+      let cursor = month;
+      for (let i = 0; i < count; i += 1) {
+        months.unshift(cursor);
+        cursor = previousMonth(cursor);
+      }
+      return months.map((m, i) => ({ month: m, cents: totals[i] ?? 0 }));
+    },
+  });
+}
+
+export function useMonthFacts(month: string) {
+  return useQuery({ queryKey: ['month-facts', month], queryFn: () => getMonthFacts(month) });
+}
+
+export function useGoals() {
+  return useQuery({ queryKey: ['goals'], queryFn: listGoals });
+}
+
+export function useInsights() {
+  return useQuery({ queryKey: queryKeys.insights, queryFn: listInsights });
+}
+
+export function useDismissInsight() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (insightId: string) => dismissInsight(insightId),
+    onSuccess: () => void client.invalidateQueries({ queryKey: queryKeys.insights }),
+  });
+}
+
+/** Create (or find) a category by name. Returns the category either way. */
+export function useCreateCategory() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => createCategory(name),
+    onSuccess: () => void client.invalidateQueries(),
+  });
+}
+
+/** A month's expenses in one category, or unsorted ones when `categoryId` is null. */
+export function useExpensesInCategory(month: string, categoryId: string | null) {
+  return useQuery({
+    queryKey: ['expenses-in-category', month, categoryId],
+    queryFn: () => listExpensesInCategory(month, categoryId),
+  });
+}
+
+/**
+ * Move an expense to a category — and every unsorted expense from the same shop.
+ *
+ * Also records the decision in merchant memory as a USER correction (COST-CONTROLS
+ * §3), so next month's statement puts this merchant in the right place without
+ * asking the model, and no model suggestion can ever overrule it.
+ */
+export function useRecategorise() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: async (input: {
+      expenseId: string;
+      merchant: string | null;
+      categoryId: string | null;
+    }) => {
+      const changed = await setCategoryForMerchant(
+        input.expenseId,
+        input.categoryId,
+        sameMerchantAs(input.merchant)
+      );
+      await rememberMerchant(input.merchant, input.categoryId, 'user');
+      return changed;
+    },
+    onSuccess: () => void client.invalidateQueries(),
   });
 }

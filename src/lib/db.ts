@@ -30,24 +30,46 @@ const DATABASE_NAME = 'sholdi.db';
  * which migrations a given phone has already run — the local equivalent of the
  * migrations folder, and just as strictly ordered.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
-let database: SQLite.SQLiteDatabase | null = null;
+/**
+ * The PROMISE of the open database, not the database itself.
+ *
+ * This used to cache the resolved handle, which only helps callers that arrive after
+ * the first open has finished. Home asks for five aggregates at once on launch, so
+ * five callers all found the cache empty, opened five connections, and ran five
+ * migrations against one file at the same moment. SQLite serialises writers, and a
+ * writer that finds the lock taken fails at once with SQLITE_BUSY — which Android
+ * surfaces as a native (Java-side) rejection, "database is locked". A fresh install
+ * or a schema bump was exactly when it fired.
+ *
+ * Caching the promise makes every concurrent caller wait on the single open.
+ */
+let opening: Promise<SQLite.SQLiteDatabase> | null = null;
 
-/** Open (and migrate) the database. Safe to call repeatedly. */
-export async function getDatabase(): Promise<SQLite.SQLiteDatabase> {
-  if (database) return database;
-
-  const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
-  await migrate(db);
-  database = db;
-  return db;
+/** Open (and migrate) the database. Safe to call repeatedly and concurrently. */
+export function getDatabase(): Promise<SQLite.SQLiteDatabase> {
+  if (!opening) {
+    opening = (async () => {
+      const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
+      await migrate(db);
+      return db;
+    })().catch((error) => {
+      // A failed open must not be cached forever; the next caller retries.
+      opening = null;
+      throw error;
+    });
+  }
+  return opening;
 }
 
 async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   // WAL keeps reads from blocking writes — the import screen writes 47 rows while
   // the list behind it is still being read.
   await db.execAsync('PRAGMA journal_mode = WAL;');
+  // Wait up to 5s for a lock instead of failing at once with SQLITE_BUSY. SQLite's
+  // default is zero, so any overlap between a write and another write was an error.
+  await db.execAsync('PRAGMA busy_timeout = 5000;');
   await db.execAsync('PRAGMA foreign_keys = ON;');
 
   const row = await db.getFirstAsync<{ user_version: number }>('PRAGMA user_version;');
@@ -152,6 +174,26 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     `);
   }
 
+  if (current < 3) {
+    // The usage ledger. COST-CONTROLS.md §7.
+    //
+    // §7 puts this in Postgres keyed by user_id. There is no Postgres and no
+    // user_id — one phone, one person — so it lives here, keyed by what is being
+    // counted and the period it is counted in. See src/features/usage/quota.ts for
+    // what that trade costs and what covers the rest.
+    await db.execAsync(`
+      CREATE TABLE IF NOT EXISTS usage_quotas (
+        kind       TEXT NOT NULL,
+        -- 'YYYY-MM-DD' for a daily quota, 'YYYY-MM' for a monthly one. The device's
+        -- own local date, so "today" means the user's today.
+        period_key TEXT NOT NULL,
+        used       INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (kind, period_key)
+      );
+    `);
+  }
+
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION};`);
 }
 
@@ -189,7 +231,14 @@ export function newId(): string {
   });
 }
 
-/** Wipe everything. The user's data is theirs to delete, on device, immediately. */
+/**
+ * Wipe everything. The user's data is theirs to delete, on device, immediately.
+ *
+ * `usage_quotas` is deliberately left alone. It holds no spending data — only how
+ * many calls were made in which period — and clearing it would turn "delete my
+ * data" into a one-tap way to reset the daily cap. Merchant patterns DO go: those
+ * are derived from the user's purchases and are theirs to erase.
+ */
 export async function deleteAllData(): Promise<void> {
   const db = await getDatabase();
   await db.execAsync(`
@@ -197,6 +246,7 @@ export async function deleteAllData(): Promise<void> {
     DELETE FROM imports;
     DELETE FROM insights;
     DELETE FROM goals;
+    DELETE FROM merchant_patterns;
     DELETE FROM categories;
   `);
   await seedSystemCategories(db);
@@ -204,5 +254,5 @@ export async function deleteAllData(): Promise<void> {
 
 /** Test seam: forget the cached handle so a fresh one is opened next time. */
 export function resetDatabaseHandle(): void {
-  database = null;
+  opening = null;
 }
